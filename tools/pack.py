@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""C17 API 1 deterministic packaging. Standard library only; does not execute JS."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import re
+import stat
+import sys
+import zipfile
+from pathlib import Path, PurePosixPath
+
+MAX_FILE = 256 * 1024
+MAX_TOTAL = 1024 * 1024
+MAX_FILES = 32
+ROOT = Path(__file__).resolve().parents[1]
+META_FIELDS = {"id", "name", "version", "versionCode", "apiVersion", "description", "author", "capabilities"}
+MANIFEST_FIELDS = META_FIELDS | {"entry"}
+ID_RE = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
+HEADER_RE = re.compile(r"^\s*var\s+plugin\s*=\s*", re.MULTILINE)
+ALLOWED_EXT = {".js", ".md", ".txt"}
+
+
+class Invalid(ValueError):
+    pass
+
+
+def json_bytes(value):
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode("utf-8")
+
+
+def _pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise Invalid("JSON 含重复字段：" + key)
+        result[key] = value
+    return result
+
+
+def decode_json(data):
+    try:
+        return json.loads(data.decode("utf-8-sig"), object_pairs_hook=_pairs,
+                          parse_constant=lambda value: (_ for _ in ()).throw(Invalid("JSON 数值无效：" + value)))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise Invalid("不是有效 UTF-8 JSON：" + str(error)) from error
+
+
+def _text(obj, key, maximum, required=True):
+    if not required and key not in obj:
+        return
+    value = obj.get(key)
+    if not isinstance(value, str) or len(value) > maximum or "\0" in value or required and not value.strip():
+        raise Invalid("元数据文字字段无效：" + key)
+
+
+def validate_metadata(value, manifest=False):
+    if not isinstance(value, dict) or set(value) - (MANIFEST_FIELDS if manifest else META_FIELDS):
+        raise Invalid("元数据必须为对象且不能有未知字段")
+    for key, maximum in (("id", 80), ("name", 80), ("version", 32)):
+        _text(value, key, maximum)
+    if len(value["id"]) < 3 or not ID_RE.fullmatch(value["id"]):
+        raise Invalid("插件 ID 格式无效")
+    _text(value, "description", 1024, False)
+    _text(value, "author", 80, False)
+    for key, low, high in (("versionCode", 1, 2147483647), ("apiVersion", 1, 1)):
+        if type(value.get(key)) is not int or not low <= value[key] <= high:
+            raise Invalid("元数据整数字段无效：" + key)
+    caps = value.get("capabilities", [])
+    if not isinstance(caps, list) or len(caps) > 2 or any(not isinstance(cap, str) or cap not in ("settings", "systemui") for cap in caps) or len(set(caps)) != len(caps):
+        raise Invalid("capabilities 只能是唯一的 settings/systemui")
+    if manifest:
+        _text(value, "entry", 128)
+        validate_path(value["entry"])
+        if PurePosixPath(value["entry"]).suffix != ".js":
+            raise Invalid("入口必须为 .js")
+
+
+def validate_path(name):
+    if not isinstance(name, str) or not name or len(name) > 128 or "\\" in name or "\0" in name:
+        raise Invalid("非法文件路径")
+    path = PurePosixPath(name)
+    if path.is_absolute() or ":" in name or any(part in ("", ".", "..") or part.endswith((".", " ")) for part in name.split("/")):
+        raise Invalid("文件路径必须是无穿越的相对路径：" + name)
+    if name not in ("LICENSE", "plugin.json") and path.suffix not in ALLOWED_EXT:
+        raise Invalid("不支持的包内文件类型：" + name)
+
+
+def validate_files(files):
+    if not files or len(files) > MAX_FILES or sum(len(data) for data in files.values()) > MAX_TOTAL:
+        raise Invalid("插件超过 32 项或 1MiB 总容量")
+    normalized = set()
+    for name, data in files.items():
+        validate_path(name)
+        canonical = name.lower()
+        if canonical in normalized:
+            raise Invalid("包内路径忽略大小写后重复：" + name)
+        normalized.add(canonical)
+        if len(data) > MAX_FILE:
+            raise Invalid("单项文件超过 256KiB：" + name)
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeError as error:
+            raise Invalid("包内所有文件必须是 UTF-8：" + name) from error
+        if "\0" in text:
+            raise Invalid("包内文本不能包含 NUL：" + name)
+    if "plugin.json" not in files:
+        raise Invalid("包根目录缺少 plugin.json")
+    manifest = decode_json(files["plugin.json"])
+    validate_metadata(manifest, True)
+    if manifest["entry"] not in files:
+        raise Invalid("入口文件不存在：" + manifest["entry"])
+    try:
+        source = files[manifest["entry"]].decode("utf-8-sig")
+    except UnicodeError as error:
+        raise Invalid("入口脚本必须为 UTF-8") from error
+    match = HEADER_RE.search(source)
+    if not match:
+        raise Invalid("标准构建器要求 var plugin = {严格 JSON 元数据}; 源码头；独立脚本可直接交应用导入")
+    try:
+        metadata, end = json.JSONDecoder(object_pairs_hook=_pairs).raw_decode(source, match.end())
+    except json.JSONDecodeError as error:
+        raise Invalid("plugin 元数据头必须是严格 JSON") from error
+    if not source[end:].lstrip().startswith(";"):
+        raise Invalid("plugin 元数据头后需要分号")
+    validate_metadata(metadata)
+    expected = {key: value for key, value in manifest.items() if key != "entry"}
+    if metadata != expected:
+        raise Invalid("manifest 与 JavaScript 元数据头不一致")
+    if not re.search(r"\bC17\s*\.\s*define\s*\(", source):
+        raise Invalid("脚本没有 C17.define 声明")
+    return manifest
+
+
+def read_source(directory):
+    directory = Path(directory)
+    if directory.is_symlink() or not directory.is_dir():
+        raise Invalid("源码目录不存在或为链接")
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise Invalid("不接受符号链接：" + str(path))
+        if path.is_file():
+            name = path.relative_to(directory).as_posix()
+            validate_path(name)
+            if path.stat().st_size > MAX_FILE:
+                raise Invalid("单项文件超过 256KiB：" + name)
+            if len(files) >= MAX_FILES:
+                raise Invalid("文件超过 32 项")
+            files[name] = path.read_bytes()
+    manifest = validate_files(files)
+    files["plugin.json"] = json_bytes(manifest)
+    return files, manifest
+
+
+def archive_bytes(files):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name, data in sorted(files.items()):
+            item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            item.create_system = 3
+            item.external_attr = (stat.S_IFREG | 0o644) << 16
+            item.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(item, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+    data = buffer.getvalue()
+    inspect_archive(data)
+    return data
+
+
+def inspect_archive(data):
+    if len(data) > MAX_TOTAL:
+        raise Invalid("ZIP 文件超过 1MiB")
+    files = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if len(archive.infolist()) > MAX_FILES:
+                raise Invalid("ZIP 条目超过 32 项")
+            total = 0
+            for item in archive.infolist():
+                validate_path(item.filename)
+                mode = item.external_attr >> 16
+                if item.filename in files or item.is_dir() or stat.S_ISLNK(mode) or stat.S_IFMT(mode) not in (0, stat.S_IFREG) or item.flag_bits & 1:
+                    raise Invalid("ZIP 含重复条目、目录、链接或加密条目")
+                if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                    raise Invalid("ZIP 仅支持 stored/deflate 压缩")
+                total += item.file_size
+                if item.file_size > MAX_FILE or total > MAX_TOTAL:
+                    raise Invalid("ZIP 解压容量超限")
+                if item.file_size > 65536 and item.file_size > max(1, item.compress_size) * 200:
+                    raise Invalid("ZIP 条目压缩比超过 200")
+                with archive.open(item) as stream:
+                    content = stream.read(MAX_FILE + 1)
+                if len(content) > MAX_FILE or len(content) != item.file_size:
+                    raise Invalid("ZIP 条目大小无效")
+                files[item.filename] = content
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
+        raise Invalid("无效 ZIP：" + str(error)) from error
+    return validate_files(files)
+
+
+def build(directory, out):
+    files, manifest = read_source(directory)
+    data = archive_bytes(files)
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    filename = f'{manifest["id"]}-{manifest["versionCode"]}.zip'
+    checksum = hashlib.sha256(data).hexdigest()
+    (out / filename).write_bytes(data)
+    (out / (filename + ".sha256")).write_text(f"{checksum}  {filename}\n", encoding="utf-8", newline="\n")
+    entry = dict(manifest)
+    entry.pop("entry")
+    entry.update(file=filename, sha256=checksum, size=len(data))
+    return entry
+
+
+def validate_catalog(catalog):
+    allowed = {"schemaVersion", "apiVersion", "plugins", "name", "description", "updatedAt", "readmeUrl", "changesUrl"}
+    if not isinstance(catalog, dict) or set(catalog) - allowed or type(catalog.get("schemaVersion")) is not int or catalog["schemaVersion"] != 1 or type(catalog.get("apiVersion")) is not int or catalog["apiVersion"] != 1:
+        raise Invalid("目录格式或 API 版本无效")
+    entries = catalog.get("plugins")
+    if not isinstance(entries, list) or len(entries) > 128:
+        raise Invalid("目录最多包含 128 个插件")
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) - (META_FIELDS | {"file", "sha256", "size"}):
+            raise Invalid("目录条目有未知字段")
+        validate_metadata({key: value for key, value in entry.items() if key in META_FIELDS})
+        if entry["id"] in seen:
+            raise Invalid("索引包含重复插件 ID")
+        seen.add(entry["id"])
+        filename = entry.get("file")
+        if not isinstance(filename, str) or not re.fullmatch(r"[a-z0-9_.-]+(?:/[a-z0-9_.-]+)*\.zip", filename) or any(part in (".", "..") for part in filename.split("/")):
+            raise Invalid("目录 file 必须为安全相对 ZIP 路径")
+        if not isinstance(entry.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]):
+            raise Invalid("目录 SHA-256 无效")
+        if type(entry.get("size")) is not int or not 1 <= entry["size"] <= MAX_TOTAL:
+            raise Invalid("目录 ZIP 大小无效")
+    for key in allowed - {"schemaVersion", "apiVersion", "plugins"}:
+        if key in catalog and (not isinstance(catalog[key], str) or len(catalog[key]) > 4096 or "\0" in catalog[key]):
+            raise Invalid("目录说明字段无效：" + key)
+    return catalog
+
+
+def write_index(entries, out, metadata=None):
+    ids = [entry["id"] for entry in entries]
+    if len(set(ids)) != len(ids):
+        raise Invalid("索引包含重复插件 ID")
+    entries = sorted(entries, key=lambda value: value["id"])
+    out = Path(out)
+    catalog = dict(metadata or {})
+    catalog.update(schemaVersion=1, apiVersion=1, plugins=entries)
+    validate_catalog(catalog)
+    data = json_bytes(catalog)
+    (out / "index.json").write_bytes(data)
+    sums = [f'{entry["sha256"]}  {entry["file"]}' for entry in entries]
+    sums.append(hashlib.sha256(data).hexdigest() + "  index.json")
+    (out / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8", newline="\n")
+
+
+def publish(directory, repository):
+    """Prepare a reviewed package and local catalog; never commit, push or publish remotely."""
+    directory, repository = Path(directory).resolve(), Path(repository).resolve()
+    for templates in (ROOT / "templates", repository / "templates"):
+        try:
+            directory.relative_to(templates.resolve())
+        except ValueError:
+            continue
+        raise Invalid("教学模板不能直接发布；请复制到自己的开发目录、修改身份并完成审查")
+    files, manifest = read_source(directory)
+    if "LICENSE" not in files or "README.md" not in files or not manifest.get("author", "").strip():
+        raise Invalid("正式分发需要作者、包内 LICENSE 与 README.md 来源/适配说明")
+    index = repository / "index.json"
+    catalog = validate_catalog(decode_json(index.read_bytes())) if index.exists() else {"schemaVersion": 1, "apiVersion": 1, "plugins": []}
+    data = archive_bytes(files)
+    checksum = hashlib.sha256(data).hexdigest()
+    previous = next((item for item in catalog["plugins"] if item["id"] == manifest["id"]), None)
+    if previous is not None and (manifest["versionCode"] < previous["versionCode"] or manifest["versionCode"] == previous["versionCode"] and checksum != previous["sha256"]):
+        raise Invalid("禁止降级或替换同版本的不同内容，请增加 versionCode")
+    if previous is None and len(catalog["plugins"]) >= 128:
+        raise Invalid("目录已达 128 个插件上限")
+    entry = build(directory, repository / "packages")
+    entry["file"] = "packages/" + entry["file"]
+    entries = [item for item in catalog["plugins"] if item["id"] != entry["id"]] + [entry]
+    write_index(entries, repository, {key: value for key, value in catalog.items() if key != "plugins"})
+    return entry
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    subs = parser.add_subparsers(dest="command", required=True)
+    for name in ("lint", "build", "build-all", "inspect", "catalog", "publish"):
+        sub = subs.add_parser(name)
+        if name == "build-all":
+            sub.add_argument("source", type=Path, nargs="?", default=ROOT / "templates")
+        else:
+            sub.add_argument("source", type=Path)
+        if name in ("build", "build-all"):
+            sub.add_argument("--out", type=Path, default=Path("dist"))
+        if name == "publish":
+            sub.add_argument("--repository", type=Path, default=ROOT)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "lint":
+            files, manifest = read_source(args.source)
+            archive_bytes(files)
+            print("结构通过：" + manifest["id"] + "；JavaScript 语义仍由 C17 校验")
+        elif args.command == "inspect":
+            if args.source.stat().st_size > MAX_TOTAL:
+                raise Invalid("ZIP 文件超过 1MiB")
+            manifest = inspect_archive(args.source.read_bytes())
+            print("ZIP 结构通过：" + manifest["id"])
+        elif args.command == "catalog":
+            catalog = validate_catalog(decode_json(args.source.read_bytes()))
+            print("目录通过：" + str(len(catalog["plugins"])) + " 个插件")
+        elif args.command == "publish":
+            entry = publish(args.source, args.repository)
+            print("已准备本地发行包与目录：" + entry["file"] + "；尚未提交或推送")
+        else:
+            sources = [args.source] if args.command == "build" else sorted(path for path in args.source.iterdir() if path.is_dir())
+            if not sources:
+                raise Invalid("没有插件源码")
+            # Validate every package and duplicate ID before producing a partial index.
+            seen = set()
+            for source in sources:
+                files, manifest = read_source(source)
+                archive_bytes(files)
+                if manifest["id"] in seen:
+                    raise Invalid("重复插件 ID：" + manifest["id"])
+                seen.add(manifest["id"])
+            entries = [build(source, args.out) for source in sources]
+            print(f"已生成 {len(entries)} 个本地开发包与校验和；未更新公开目录")
+        return 0
+    except (Invalid, OSError, ValueError) as error:
+        print("失败：" + str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
