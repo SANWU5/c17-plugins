@@ -174,8 +174,9 @@ class PackagingTests(unittest.TestCase):
     def test_public_catalog_is_deliberately_empty(self):
         catalog = pack.validate_catalog(pack.decode_json((ROOT / "index.json").read_bytes()))
         self.assertEqual([], catalog["plugins"])
-        self.assertEqual("README.md", catalog["readmeUrl"])
-        self.assertEqual("CHANGELOG.md", catalog["changesUrl"])
+        self.assertEqual("C17 扩展插件", catalog["name"])
+        self.assertEqual("https://github.com/SANWU5/c17-plugins/blob/main/README.md", catalog["readmeUrl"])
+        self.assertEqual("https://github.com/SANWU5/c17-plugins/blob/main/CHANGELOG.md", catalog["changesUrl"])
         self.assertEqual([], list((ROOT / "packages").glob("*.zip")))
 
     def test_default_developer_build_does_not_publish_catalog(self):
