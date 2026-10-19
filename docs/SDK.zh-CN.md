@@ -26,7 +26,7 @@ API 1 只执行 `entry` 这一份脚本。包里可以附带其他 JS 源码供�
 
 脚本必须且只能调用一次 `C17.define(普通对象)`。其结果只允许 JSON 数据，不接受函数、`undefined`、循环引用或 Java 对象。未知字段会被拒绝。
 
-标准构建器采用开发模板的写法：`var plugin = {严格 JSON 元数据};`，之后赋值 `plugin.ui`、`plugin.settings` 与 `plugin.hooks`，最后 `C17.define(plugin)`。构建器读取这个 JSON 元数据头并与 manifest 比对。应用也接受直接 `C17.define({...})` 的独立脚本；标准构建器不负责解析所有 JavaScript 语法。
+标准构建器采用开发模板的写法：`var plugin = {严格 JSON 元数据};`，之后以 `plugin.ui = [严格 JSON 控件声明];` 声明完整表单，再赋值 `plugin.settings` 与 `plugin.hooks`，最后 `C17.define(plugin)`。构建器读取元数据头与 manifest 比对，并静态检查唯一的表单声明、类型、默认值和至少一个可编辑项；它不执行脚本，因此不能证明后续脚本没有改写表单或每个参数都关联功能，宿主仍会对实际输出强制检查。应用也接受直接 `C17.define({...})` 的独立脚本；一般动态脚本可直接交宿主验证导入，标准构建器不负责解析所有 JavaScript 语法。
 
 manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致。宿主允许 manifest 省略 description、author、capabilities；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
 
@@ -34,24 +34,30 @@ manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author
 
 ## 表单与状态
 
-`ui` 最多 64 项；每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。
+`ui` 包含 1–64 项，必须至少有一个真实关联功能的 `switch/slider/input/select`，完整呈现插件全部可调参数；只有说明文字或按钮会被拒绝导入。每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。旧版已安装无配置插件保留原记录，不自动删除或改启用状态，作者应发升级包补全。
 
 | type | 数据与默认值 |
 |---|---|
 | `text` | 说明文字，无状态 key |
 | `switch` | 布尔值；缺省 `default:false` |
-| `slider` | 数字；必填 `min/max`，范围在 ±100000 内且 min < max；step > 0 且不大于范围，缺省 1；default 缺省 min |
+| `slider` | 数字；必填 `min/max`，范围在 ±100000 内且 min < max；step > 0 且不大于范围，缺省 1；default 缺省 min；2.0.4 / code196 起可选 `unit` 显示单位（最多 16 字符） |
 | `input` | 文字；缺省空串，最多 4096 字符 |
 | `select` | `options:[{value,label}]`，1–64 个唯一字符串值；default 缺省第一项 value |
 | `button` | 点击后把 `value` 写入该 key 并重新编译；value 缺省 true，可用字符串/数字/布尔值；不是任意回调 |
 
 读取 `C17.state.<key>`。首次评估状态可能为空，脚本应给出回退值；宿主取得声明后补齐默认值和已保存的状态，再评估一次。每次更改表单重新编译规则，脚本修改临时 `C17.state` 对象不会写回保存值。不要让元数据或能力声明依赖状态。
 
+完整配置应逐项声明在 `ui` 中；宿主不会把一个模式选择自动展开成多个未声明的设置。API 1 的当前控件键和类型必须保持稳定，不支持通过增删有状态控件保存隐藏配置。可根据已保存的状态调整说明文字与输出规则，但不能让现有状态因控件类型、选项或范围变化而失效。`unit` 只用于滑块显示，不参与数值换算；需要兼容 code192–195 时请省略该字段。
+
+2.0.4 / code196 起，插件详情可将该插件的所有独立配置一次恢复为声明的默认值。宿主从空状态解析默认值，最多四轮稳定生成且重复结果一致后才提交；身份、权限或默认规则异常、与其他插件冲突时保留原配置及启用状态。恢复默认不写入用户的 C17 原设置，也不撤销其他插件的配置。
+
 ## settings 能力
 
 声明 `capabilities:["settings"]` 后，通过 `settings` 输出最多 64 项可见的 C17 设置覆盖。键必须在当前宿主真实 `SettingsCatalog` 中，类型和范围与内置设置一致。数字超范围会拒绝，不自动截断。隐藏项、诊断/安全模式、资源导入和内部配置不能覆盖。
 
 例如默认时钟需要 `clock_controls_enabled:true`、`clock_enabled:true` 与 `clock_pattern:"HH:mm:ss"`；字号还需要 `clock_size_enabled:true` 与 `clock_scale:100`。`clock_scale` 是 25–250 的百分比，不是 sp 字号。
+
+code196 的控制中心行数使用 `qs_card_grid_rows`，取整数 4–7；新插件应直接声明行数滑块。code195 曾公开的 `qs_card_six_rows_enabled` 仍作为 API 1 兼容别名接受布尔值，在运行副本中转换为 6/4 行；不重写用户保存的行数。不同插件不能分别占用旧别名与新行数来绕过冲突检查。顶部小磁贴使用 `qs_card_small_tiles_2x1_enabled`，底部显示方式 `qs_card_small_tiles_mode` 只接受 `always/hidden/swipe`；实际 ROM 支持和安全恢复需另行验证。
 
 覆盖在运行时合并到配置副本，不写用户保存的偏好。多个已启用插件不能覆盖相同设置键；冲突会拒绝启用或更新，不会按加载顺序覆盖另一插件。升级必须用更大的 `versionCode`，保留仍符合新控件约束的表单状态，其余使用新默认值，并默认停用。关闭、删除和安全模式可撤销覆盖。
 

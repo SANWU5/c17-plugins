@@ -12,9 +12,9 @@ var plugin = {
 
 var scale = typeof C17.state.scale === "number" ? C17.state.scale : 100;
 plugin.ui = [
-  {type: "text", title: "默认状态栏时钟", description: "启用期间临时覆盖默认时钟的格式与字号；关闭插件恢复原设置。双排时钟另有自己的规则。"},
-  {type: "switch", key: "seconds", title: "显示秒数", default: true},
-  {type: "slider", key: "scale", title: "字号比例（%）", min: 25, max: 250, step: 1, default: 100}
+  {"type": "text", "title": "默认状态栏时钟", "description": "启用期间临时覆盖默认时钟的格式与字号；关闭插件恢复原设置。双排时钟另有自己的规则。"},
+  {"type": "switch", "key": "seconds", "title": "显示秒数", "default": true},
+  {"type": "slider", "key": "scale", "title": "字号比例（%）", "min": 25, "max": 250, "step": 1, "default": 100}
 ];
 plugin.settings = {
   clock_controls_enabled: true,

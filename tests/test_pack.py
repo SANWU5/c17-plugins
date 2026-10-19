@@ -171,6 +171,37 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(pack.Invalid, "源码头"):
             pack.validate_files(files)
 
+    def test_complete_configuration_is_required_by_standard_builder(self):
+        files = self.files()
+        source = files["main.js"].decode("utf-8")
+        start = source.index("plugin.ui = ")
+        end = source.index("\n];", start) + 3
+        for form in ([], [{"type": "text", "title": "说明"}], [{"type": "button", "title": "执行", "key": "action"}]):
+            with self.subTest(form=form), self.assertRaisesRegex(pack.Invalid, "完整设置"):
+                changed = dict(files)
+                changed["main.js"] = (source[:start] + "plugin.ui = " + json.dumps(form, ensure_ascii=False) + ";" + source[end:]).encode("utf-8")
+                pack.validate_files(changed)
+
+    def test_complete_configuration_types_defaults_and_units(self):
+        for control in ({"type": "switch", "title": "开关", "key": "enabled"},
+                        {"type": "slider", "title": "透明度", "key": "opacity", "min": 0, "max": 100, "unit": "%"},
+                        {"type": "input", "title": "文字", "key": "label"},
+                        {"type": "select", "title": "模式", "key": "mode", "options": [{"value": "a", "label": "A"}]}):
+            pack.validate_form([control])
+        for control in ({"type": "switch", "title": "开关", "key": "enabled", "unit": "%"},
+                        {"type": "switch", "title": "开关", "key": "enabled", "default": "yes"},
+                        {"type": "slider", "title": "透明度", "key": "opacity", "min": 0, "max": 100, "unit": "x" * 17},
+                        {"type": "slider", "title": "透明度", "key": "opacity", "min": 0, "max": 100, "unit": 1},
+                        {"type": "slider", "title": "透明度", "key": "opacity", "min": 0, "max": 100, "default": 101},
+                        {"type": "select", "title": "模式", "key": "mode", "options": [{"value": "a", "label": "A"}], "default": "b"}):
+            with self.subTest(control=control), self.assertRaises(pack.Invalid):
+                pack.validate_form([control])
+
+    def test_builder_requires_literal_ui_without_running_script(self):
+        for source in ("plugin.ui = makeUntrustedForm();", "throw new Error('must not run');", "plugin.ui = []; plugin.ui = [];", 'plugin.ui = [{"type":"input","title":"文字","key":"label","default":NaN}];'):
+            with self.subTest(source=source), self.assertRaises(pack.Invalid):
+                pack.validate_source_form(source)
+
     def test_public_catalog_is_deliberately_empty(self):
         catalog = pack.validate_catalog(pack.decode_json((ROOT / "index.json").read_bytes()))
         self.assertEqual([], catalog["plugins"])

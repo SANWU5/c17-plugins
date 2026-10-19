@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import re
 import stat
 import sys
@@ -20,6 +21,7 @@ META_FIELDS = {"id", "name", "version", "versionCode", "apiVersion", "descriptio
 MANIFEST_FIELDS = META_FIELDS | {"entry"}
 ID_RE = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
 HEADER_RE = re.compile(r"^\s*var\s+plugin\s*=\s*", re.MULTILINE)
+UI_RE = re.compile(r"^\s*plugin\s*\.\s*ui\s*=\s*", re.MULTILINE)
 ALLOWED_EXT = {".js", ".md", ".txt"}
 
 
@@ -78,6 +80,80 @@ def validate_metadata(value, manifest=False):
             raise Invalid("入口必须为 .js")
 
 
+def validate_form(controls):
+    """Validate the builder's literal form; the host still checks actual JS output."""
+    if not isinstance(controls, list) or not 1 <= len(controls) <= 64:
+        raise Invalid("插件必须提供完整设置，ui 需包含 1–64 项控件")
+    keys, editable = set(), 0
+    def number(value):
+        try:
+            return type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            return False
+    def primitive(value):
+        return type(value) is bool or isinstance(value, str) and len(value) <= 4096 and "\0" not in value or number(value)
+    for control in controls:
+        if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "options", "value"}:
+            raise Invalid("插件控件必须为对象且不能包含未知字段")
+        kind = control.get("type")
+        if kind not in ("text", "switch", "slider", "input", "select", "button"):
+            raise Invalid("不支持的插件控件类型")
+        _text(control, "title", 120)
+        _text(control, "description", 512, False)
+        if "unit" in control:
+            if kind != "slider":
+                raise Invalid("只有滑块可以声明显示单位")
+            _text(control, "unit", 16, False)
+        if kind == "text":
+            continue
+        key = control.get("key")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,63}", key) or key in ("constructor", "prototype") or key in keys:
+            raise Invalid("插件配置 key 无效或重复")
+        keys.add(key)
+        if kind != "button":
+            editable += 1
+        default = control.get("default", False if kind == "switch" else control.get("min") if kind == "slider" else control.get("value", True) if kind == "button" else "")
+        if kind == "select":
+            options = control.get("options")
+            if not isinstance(options, list) or not 1 <= len(options) <= 64:
+                raise Invalid("选择控件必须声明 1–64 个选项")
+            values = set()
+            for option in options:
+                if not isinstance(option, dict) or set(option) != {"value", "label"}:
+                    raise Invalid("选择项必须包含 value 和 label")
+                _text(option, "value", 128)
+                _text(option, "label", 120)
+                if option["value"] in values:
+                    raise Invalid("选择项 value 重复")
+                values.add(option["value"])
+            default = control.get("default", options[0]["value"])
+            if not isinstance(default, str) or default not in values:
+                raise Invalid("默认配置不在选项中")
+        if not primitive(default) or kind == "switch" and type(default) is not bool or kind == "input" and not isinstance(default, str):
+            raise Invalid("插件配置默认值类型或内容无效")
+        if kind == "slider":
+            low, high, step = control.get("min"), control.get("max"), control.get("step", 1)
+            if not all(number(value) for value in (low, high, step, default)) or not -100000 <= low < high <= 100000 or not 0 < step <= high-low or not low <= default <= high:
+                raise Invalid("滑块范围、步长或默认值无效")
+        if kind == "button" and not primitive(control.get("value", True)):
+            raise Invalid("按钮值必须为文字、有限数字或布尔值")
+    if editable == 0:
+        raise Invalid("插件必须提供完整设置，至少声明一个开关、滑块、输入框或选择项；只有说明或按钮不符合规范")
+
+
+def validate_source_form(source):
+    matches = list(UI_RE.finditer(source))
+    if len(matches) != 1:
+        raise Invalid("标准构建器要求唯一的 plugin.ui = [严格 JSON 控件声明];，插件必须提供完整设置")
+    try:
+        controls, end = json.JSONDecoder(object_pairs_hook=_pairs, parse_constant=lambda value: (_ for _ in ()).throw(Invalid("JSON 数值无效：" + value))).raw_decode(source, matches[0].end())
+    except json.JSONDecodeError as error:
+        raise Invalid("标准构建器要求 plugin.ui 使用严格 JSON 数组；动态脚本请直接交宿主验证导入") from error
+    if not source[end:].lstrip().startswith(";"):
+        raise Invalid("plugin.ui 严格 JSON 数组后需要分号")
+    validate_form(controls)
+
+
 def validate_path(name):
     if not isinstance(name, str) or not name or len(name) > 128 or "\\" in name or "\0" in name:
         raise Invalid("非法文件路径")
@@ -131,6 +207,7 @@ def validate_files(files):
         raise Invalid("manifest 与 JavaScript 元数据头不一致")
     if not re.search(r"\bC17\s*\.\s*define\s*\(", source):
         raise Invalid("脚本没有 C17.define 声明")
+    validate_source_form(source)
     return manifest
 
 

@@ -12,8 +12,8 @@ var plugin = {
 
 var offset = typeof C17.state.offset === "number" ? C17.state.offset : 0;
 plugin.ui = [
-  {type: "text", title: "时钟视图垂直平移", description: "先核验 ROM 的 Clock.updateClock()。默认 0dp；正数向下，负数向上。这是位置微调，不改变系统布局高度。"},
-  {type: "slider", key: "offset", title: "垂直位移（dp）", min: -12, max: 12, step: 0.5, default: 0}
+  {"type": "text", "title": "时钟视图垂直平移", "description": "先核验 ROM 的 Clock.updateClock()。默认 0dp；正数向下，负数向上。这是位置微调，不改变系统布局高度。"},
+  {"type": "slider", "key": "offset", "title": "垂直位移（dp）", "min": -12, "max": 12, "step": 0.5, "default": 0}
 ];
 plugin.settings = {};
 plugin.hooks = [{

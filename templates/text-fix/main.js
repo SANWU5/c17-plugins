@@ -11,8 +11,8 @@ var plugin = {
 };
 
 plugin.ui = [
-  {type: "text", title: "先核验 ROM 目标", description: "教学示例：仅适用于声明 Clock.updateClock() 的 ROM，且原文含 AM。导入成功不代表目标手机已适配。"},
-  {type: "switch", key: "enabled", title: "将 AM 修正为上午", default: true}
+  {"type": "text", "title": "先核验 ROM 目标", "description": "教学示例：仅适用于声明 Clock.updateClock() 的 ROM，且原文含 AM。导入成功不代表目标手机已适配。"},
+  {"type": "switch", "key": "enabled", "title": "将 AM 修正为上午", "default": true}
 ];
 plugin.settings = {};
 plugin.hooks = C17.state.enabled === false ? [] : [{
