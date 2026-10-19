@@ -28,7 +28,7 @@ python tools/pack.py publish D:/my-plugin --repository .
 
 索引 `file` 使用相对于索引的 `packages/...zip`，拒绝绝对地址、路径穿越、反斜杠、查询和片段；最多 128 项。每项记录真实字节数和小写 SHA-256，索引保留 README/CHANGELOG 链接。发布前请再核对目录和包内容，由维护者通过审查后提交。
 
-发布目录必须与实际包一致：`id/name/version/versionCode/apiVersion` 逐项一致，目录非空作者与包内作者一致，`capabilities` 按集合完全一致。目录 capabilities 省略时等价于 `[]`；包有 settings/systemui 能力而目录漏报、少报或误报时，客户端会拒绝导入，哈希正确也不会放行。保留工具从同一源码元数据生成的完整能力声明，不要手工删去或弱化它；更新能力时应增加插件版本，重新生成包、哈希和目录。包 manifest 可选字段的省略规则不代表在线目录可以省略包实际使用的能力。
+发布目录必须与实际包一致：`id/name/version/versionCode/apiVersion` 逐项一致，目录非空白作者与包内作者一致，`capabilities` 按集合完全一致。`description` 仅用于展示，当前客户端没有按描述做一致性比较，但发布者仍需真实说明用途。目录 capabilities 省略时等价于 `[]`；包有 settings/systemui 能力而目录漏报、少报或误报时，客户端会拒绝导入，哈希正确也不会放行。保留工具从同一源码元数据生成的完整能力声明，不要手工删去或弱化它；更新能力时应增加插件版本，重新生成包、哈希和目录。包 manifest 可选字段的省略规则不代表在线目录可以省略包实际使用的能力。
 
 ## 仓库与撤回
 

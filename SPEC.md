@@ -32,7 +32,7 @@ manifest 中声明的元数据、能力应与脚本输出一致，不得因用�
 
 每个插件目录条目只允许元数据 `id/name/version/versionCode/apiVersion/description/author/capabilities` 加 `file/sha256/size`。`file` 使用相对于索引的安全路径，例如 `packages/<id>-<versionCode>.zip`；不得是绝对 URL，不得含 `..`、反斜杠、查询或片段。`sha256` 是小写 64 位十六进制，`size` 是 1–1048576 的实际 ZIP 字节数。包必须是完整 UTF-8 兼容文本与合法 ZIP，不允许链接、加密或混淆路径。
 
-在线目录与包内脚本求值后的 `id/name/version/versionCode/apiVersion` 必须逐项完全一致；目录声明了非空 `author` 时，作者也必须一致。目录说明应真实对应包内功能，不得用不同描述隐藏用途。`capabilities` 必须与包内能力**按集合完全一致**：目录未写时按 `[]` 处理，不能表示“任意能力”或“由包自行决定”。例如包声明 `["settings"]`，目录却省略 capabilities、写 `[]` 或只写 `["systemui"]`，客户端都会取消导入，即使文件大小和 SHA-256 正确。manifest 与脚本之间的身份校验仍单独进行，不能用目录条目替代。
+在线目录与包内脚本求值后的 `id/name/version/versionCode/apiVersion` 必须逐项完全一致；目录声明了非空白 `author` 时，作者也必须一致。`description` 用于目录展示，当前客户端不按它做包身份一致性比较；发布者仍须如实描述包内功能，不得用不同描述隐藏用途。`capabilities` 必须与包内能力**按集合完全一致**：目录未写时按 `[]` 处理，不能表示“任意能力”或“由包自行决定”。例如包声明 `["settings"]`，目录却省略 capabilities、写 `[]` 或只写 `["systemui"]`，客户端都会取消导入，即使文件大小和 SHA-256 正确。manifest 与脚本之间的身份校验仍单独进行，不能用目录条目替代。
 
 客户端按大小和 SHA-256 核对下载，再进入导入预览。哈希只能发现传输或分发内容变化，不能证明作者身份、代码安全、版权合法或 ROM 兼容。收录之前仍需代码和来源审查，用户仍需确认并主动启用。
 

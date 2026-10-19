@@ -30,7 +30,7 @@ API 1 只执行 `entry` 这一份脚本。包里可以附带其他 JS 源码供�
 
 manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致。宿主允许 manifest 省略 description、author、capabilities；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
 
-从在线仓库下载还有独立的目录一致性检查：目录与脚本的 `id/name/version/versionCode/apiVersion` 逐项相同，目录非空作者与脚本作者相同，能力按集合完全相同。**目录缺少 capabilities 按空数组处理**；若脚本声明 settings 或 systemui，就必须在目录如实列出，否则下载内容即使通过 size/SHA-256 也会取消导入。这与 ZIP manifest 的可选字段省略规则是不同层次的检查。
+从在线仓库下载还有独立的目录一致性检查：目录与脚本的 `id/name/version/versionCode/apiVersion` 逐项相同，目录非空白作者与脚本作者相同，能力按集合完全相同；`description` 仅用于展示，不参与这一层的包一致性比较。**目录缺少 capabilities 按空数组处理**；若脚本声明 settings 或 systemui，就必须在目录如实列出，否则下载内容即使通过 size/SHA-256 也会取消导入。这与 ZIP manifest 的可选字段省略规则是不同层次的检查。
 
 ## 表单与状态
 
