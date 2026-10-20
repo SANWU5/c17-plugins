@@ -29,6 +29,7 @@ code202 起，控制中心自由编辑业务由独立 API 2 插件实现，宿�
 |---|---|
 | [SPEC.md](SPEC.md) | 格式、版本、命名空间、适配、能力与分发要求 |
 | [SDK](docs/SDK.zh-CN.md) | 表单、状态、settings/hooks、runtime API 和生命周期 |
+| [运行与交互验收](docs/VALIDATION.zh-CN.md) | 配置兼容、异步布局、停用恢复与媒体交互的黑盒检查 |
 | [免责声明](DISCLAIMER.zh-CN.md) | 风险边界、第三方责任、恢复与法定责任保留 |
 | [安全政策](SECURITY.md) | 安全漏洞的私密报告渠道与禁止行为 |
 | [贡献要求](CONTRIBUTING.md) | 来源、许可、适配证据、代码审查和撤回流程 |
