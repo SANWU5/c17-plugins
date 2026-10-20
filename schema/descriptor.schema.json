@@ -1,79 +1,756 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:c17:plugin-descriptor:1",
-  "title": "C17.define output API 1",
+  "title": "C17.define output API 1/2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "name", "version", "versionCode", "apiVersion", "ui"],
+  "required": [
+    "id",
+    "name",
+    "version",
+    "versionCode",
+    "apiVersion",
+    "ui"
+  ],
   "properties": {
-    "id": {"type": "string", "minLength": 3, "maxLength": 80, "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"},
-    "name": {"type": "string", "minLength": 1, "maxLength": 80},
-    "version": {"type": "string", "minLength": 1, "maxLength": 32},
-    "versionCode": {"type": "integer", "minimum": 1, "maximum": 2147483647},
-    "apiVersion": {"const": 1},
-    "description": {"type": "string", "maxLength": 1024},
-    "author": {"type": "string", "maxLength": 80},
-    "capabilities": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["settings", "systemui"]}},
-    "ui": {"type": "array", "minItems": 1, "maxItems": 64, "contains": {"type": "object", "required": ["type"], "properties": {"type": {"enum": ["switch", "slider", "input", "select"]}}}, "items": {"$ref": "#/$defs/control"}},
-    "settings": {"type": "object", "maxProperties": 64, "additionalProperties": {"type": ["boolean", "number", "string"]}},
-    "hooks": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/hook"}}
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 80,
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "versionCode": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "apiVersion": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "author": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "settings",
+          "systemui",
+          "runtime"
+        ]
+      }
+    },
+    "ui": {
+      "type": "array",
+      "minItems": 1,
+      "contains": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "switch",
+              "slider",
+              "input",
+              "select"
+            ]
+          }
+        }
+      },
+      "items": {
+        "$ref": "#/$defs/control"
+      }
+    },
+    "settings": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": {
+        "type": [
+          "boolean",
+          "number",
+          "string"
+        ]
+      }
+    },
+    "hooks": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/hook"
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 4096,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\:])(?!.*//).+\\.js$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "entry"
+          ],
+          "not": {
+            "required": [
+              "source"
+            ]
+          }
+        },
+        {
+          "required": [
+            "source"
+          ],
+          "not": {
+            "required": [
+              "entry"
+            ]
+          }
+        }
+      ]
+    }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "apiVersion"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "maxItems": 2,
+            "items": {
+              "enum": [
+                "settings",
+                "systemui"
+              ]
+            }
+          },
+          "ui": {
+            "maxItems": 64,
+            "items": {
+              "properties": {
+                "type": {
+                  "not": {
+                    "enum": [
+                      "action",
+                      "status"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "settings": {
+            "maxProperties": 64
+          },
+          "hooks": {
+            "maxItems": 32
+          }
+        },
+        "not": {
+          "required": [
+            "runtime"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "apiVersion": {
+            "const": 2
+          }
+        },
+        "required": [
+          "apiVersion"
+        ]
+      },
+      "then": {
+        "required": [
+          "runtime",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "contains": {
+              "const": "runtime"
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
-    "state": {"type": ["boolean", "number", "string"], "maxLength": 4096},
+    "state": {
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ],
+      "maxLength": 4096
+    },
     "control": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "title"],
+      "required": [
+        "type",
+        "title"
+      ],
       "properties": {
-        "type": {"enum": ["text", "switch", "slider", "input", "select", "button"]},
-        "title": {"type": "string", "minLength": 1, "maxLength": 120},
-        "description": {"type": "string", "maxLength": 512},
-        "key": {"type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$", "not": {"enum": ["constructor", "prototype"]}},
-        "default": {"$ref": "#/$defs/state"},
-        "value": {"$ref": "#/$defs/state"},
-        "min": {"type": "number", "minimum": -100000, "maximum": 100000},
-        "max": {"type": "number", "minimum": -100000, "maximum": 100000},
-        "step": {"type": "number", "exclusiveMinimum": 0},
-        "unit": {"type": "string", "maxLength": 16},
+        "type": {
+          "enum": [
+            "text",
+            "switch",
+            "slider",
+            "input",
+            "select",
+            "button",
+            "action",
+            "status"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$",
+          "not": {
+            "enum": [
+              "constructor",
+              "prototype"
+            ]
+          }
+        },
+        "default": {
+          "$ref": "#/$defs/state"
+        },
+        "value": {
+          "$ref": "#/$defs/state"
+        },
+        "min": {
+          "type": "number",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "max": {
+          "type": "number",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 16
+        },
         "options": {
-          "type": "array", "minItems": 1, "maxItems": 64,
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
           "items": {
-            "type": "object", "additionalProperties": false, "required": ["value", "label"],
-            "properties": {"value": {"type": "string", "minLength": 1, "maxLength": 128}, "label": {"type": "string", "minLength": 1, "maxLength": 120}}
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            }
           }
         }
       },
       "allOf": [
-        {"if": {"properties": {"type": {"not": {"const": "text"}}}}, "then": {"required": ["key"]}},
-        {"if": {"properties": {"type": {"const": "switch"}}}, "then": {"properties": {"default": {"type": "boolean"}}}},
-        {"if": {"properties": {"type": {"const": "slider"}}}, "then": {"required": ["min", "max"], "properties": {"default": {"type": "number"}}}, "else": {"not": {"required": ["unit"]}}},
-        {"if": {"properties": {"type": {"const": "input"}}}, "then": {"properties": {"default": {"type": "string", "maxLength": 4096}}}},
-        {"if": {"properties": {"type": {"const": "select"}}}, "then": {"required": ["options"], "properties": {"default": {"type": "string"}}}}
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "not": {
+                  "const": "text"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "key"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "switch"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "slider"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "min",
+              "max"
+            ],
+            "properties": {
+              "default": {
+                "type": "number"
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "unit"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "input"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "select"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "options"
+            ],
+            "properties": {
+              "default": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "action",
+                  "status"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "default"
+                  ]
+                },
+                {
+                  "required": [
+                    "value"
+                  ]
+                },
+                {
+                  "required": [
+                    "min"
+                  ]
+                },
+                {
+                  "required": [
+                    "max"
+                  ]
+                },
+                {
+                  "required": [
+                    "step"
+                  ]
+                },
+                {
+                  "required": [
+                    "unit"
+                  ]
+                },
+                {
+                  "required": [
+                    "options"
+                  ]
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     "hook": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "className", "method", "argCount", "kind"],
+      "required": [
+        "id",
+        "className",
+        "method",
+        "argCount",
+        "kind"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]{1,80}$"},
-        "className": {"type": "string", "maxLength": 240, "pattern": "^(?:com\\.android\\.systemui|com\\.oplus\\.systemui|com\\.oplusos\\.systemui|com\\.oplus\\.keyguard)\\.[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$"},
-        "method": {"type": "string", "maxLength": 100, "pattern": "^[a-zA-Z_$][a-zA-Z0-9_$]*$", "not": {"enum": ["getClass", "clone", "finalize", "wait", "notify", "notifyAll", "equals", "hashCode", "toString"]}},
-        "argCount": {"type": "integer", "minimum": 0, "maximum": 8},
-        "kind": {"enum": ["text", "property", "result"]},
-        "find": {"type": "string", "minLength": 1, "maxLength": 256},
-        "replace": {"type": "string", "maxLength": 256},
-        "prefix": {"type": "string", "maxLength": 256},
-        "suffix": {"type": "string", "maxLength": 256},
-        "property": {"enum": ["alpha", "translationX", "translationY", "scaleX", "scaleY"]},
-        "value": {"oneOf": [{"type": "boolean"}, {"type": "number"}, {"type": "string", "minLength": 1, "maxLength": 1}]}
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+        },
+        "className": {
+          "type": "string",
+          "maxLength": 240,
+          "pattern": "^(?:com\\.android\\.systemui|com\\.oplus\\.systemui|com\\.oplusos\\.systemui|com\\.oplus\\.keyguard)\\.[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$"
+        },
+        "method": {
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[a-zA-Z_$][a-zA-Z0-9_$]*$",
+          "not": {
+            "enum": [
+              "getClass",
+              "clone",
+              "finalize",
+              "wait",
+              "notify",
+              "notifyAll",
+              "equals",
+              "hashCode",
+              "toString"
+            ]
+          }
+        },
+        "argCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "property",
+            "result"
+          ]
+        },
+        "find": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "replace": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "prefix": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "suffix": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "property": {
+          "enum": [
+            "alpha",
+            "translationX",
+            "translationY",
+            "scaleX",
+            "scaleY"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1
+            }
+          ]
+        }
       },
       "allOf": [
-        {"if": {"properties": {"kind": {"const": "text"}}}, "then": {"dependentRequired": {"find": ["replace"], "replace": ["find"]}, "anyOf": [{"required": ["find"]}, {"required": ["prefix"], "properties": {"prefix": {"minLength": 1}}}, {"required": ["suffix"], "properties": {"suffix": {"minLength": 1}}}], "not": {"anyOf": [{"required": ["property"]}, {"required": ["value"]}]}}},
-        {"if": {"properties": {"kind": {"const": "property"}}}, "then": {"required": ["property", "value"], "properties": {"value": {"type": "number", "minimum": -200, "maximum": 200}}, "not": {"anyOf": [{"required": ["find"]}, {"required": ["replace"]}, {"required": ["prefix"]}, {"required": ["suffix"]}]}, "allOf": [{"if": {"properties": {"property": {"const": "alpha"}}}, "then": {"properties": {"value": {"minimum": 0, "maximum": 1}}}}, {"if": {"properties": {"property": {"enum": ["scaleX", "scaleY"]}}}, "then": {"properties": {"value": {"minimum": 0.1, "maximum": 4}}}}]}},
-        {"if": {"properties": {"kind": {"const": "result"}}}, "then": {"required": ["value"], "not": {"anyOf": [{"required": ["property"]}, {"required": ["find"]}, {"required": ["replace"]}, {"required": ["prefix"]}, {"required": ["suffix"]}]}}}
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "dependentRequired": {
+              "find": [
+                "replace"
+              ],
+              "replace": [
+                "find"
+              ]
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "find"
+                ]
+              },
+              {
+                "required": [
+                  "prefix"
+                ],
+                "properties": {
+                  "prefix": {
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "required": [
+                  "suffix"
+                ],
+                "properties": {
+                  "suffix": {
+                    "minLength": 1
+                  }
+                }
+              }
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "property"
+                  ]
+                },
+                {
+                  "required": [
+                    "value"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "property"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "property",
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "number",
+                "minimum": -200,
+                "maximum": 200
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "find"
+                  ]
+                },
+                {
+                  "required": [
+                    "replace"
+                  ]
+                },
+                {
+                  "required": [
+                    "prefix"
+                  ]
+                },
+                {
+                  "required": [
+                    "suffix"
+                  ]
+                }
+              ]
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "property": {
+                      "const": "alpha"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "value": {
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "property": {
+                      "enum": [
+                        "scaleX",
+                        "scaleY"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "value": {
+                      "minimum": 0.1,
+                      "maximum": 4
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "result"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "property"
+                  ]
+                },
+                {
+                  "required": [
+                    "find"
+                  ]
+                },
+                {
+                  "required": [
+                    "replace"
+                  ]
+                },
+                {
+                  "required": [
+                    "prefix"
+                  ]
+                },
+                {
+                  "required": [
+                    "suffix"
+                  ]
+                }
+              ]
+            }
+          }
+        }
       ]
     }
   },
-  "$comment": "宿主额外检查能力声明、动态状态/默认值、控件及规则id唯一性、slider跨字段范围、当前SettingsCatalog可见键/类型/边界、真实ROM方法和返回类型、有限数值、NUL、输出128KiB/4096节点/12层。JSON Schema不能替代实际脚本求值和运行适配。"
+  "$comment": "action/status 及 C17.onAction/publishStatus 最低需要宿主 code206；code205 虽支持 API 2，也不能导入这两类控件。宿主额外检查能力声明、动态状态/默认值、控件及规则id唯一性、slider跨字段范围、当前SettingsCatalog可见键/类型/边界、真实ROM方法和返回类型、有限数值、NUL。API 1 输出限制为128KiB/4096节点/12层；API 2 不套用上述数量配额，但导入元数据求值仍隔离且有执行预算。settings/hooks 是旧声明式通道，API 2 的任意扩展通过 runtime 实现。JSON Schema不能替代实际脚本求值和运行适配。"
 }

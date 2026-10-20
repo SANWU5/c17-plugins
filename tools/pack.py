@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""C17 API 1 deterministic packaging. Standard library only; does not execute JS."""
+"""C17 API 1/2 deterministic packaging. Standard library only; does not execute JS."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,7 @@ import json
 import math
 import re
 import stat
+import struct
 import sys
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -18,7 +19,8 @@ MAX_TOTAL = 1024 * 1024
 MAX_FILES = 32
 ROOT = Path(__file__).resolve().parents[1]
 META_FIELDS = {"id", "name", "version", "versionCode", "apiVersion", "description", "author", "capabilities"}
-MANIFEST_FIELDS = META_FIELDS | {"entry"}
+PLUGIN_FIELDS = META_FIELDS | {"runtime"}
+MANIFEST_FIELDS = PLUGIN_FIELDS | {"entry"}
 ID_RE = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
 HEADER_RE = re.compile(r"^\s*var\s+plugin\s*=\s*", re.MULTILINE)
 UI_RE = re.compile(r"^\s*plugin\s*\.\s*ui\s*=\s*", re.MULTILINE)
@@ -58,8 +60,8 @@ def _text(obj, key, maximum, required=True):
         raise Invalid("元数据文字字段无效：" + key)
 
 
-def validate_metadata(value, manifest=False):
-    if not isinstance(value, dict) or set(value) - (MANIFEST_FIELDS if manifest else META_FIELDS):
+def validate_metadata(value, manifest=False, catalog=False):
+    if not isinstance(value, dict) or set(value) - (MANIFEST_FIELDS if manifest else PLUGIN_FIELDS if not catalog else META_FIELDS):
         raise Invalid("元数据必须为对象且不能有未知字段")
     for key, maximum in (("id", 80), ("name", 80), ("version", 32)):
         _text(value, key, maximum)
@@ -67,23 +69,40 @@ def validate_metadata(value, manifest=False):
         raise Invalid("插件 ID 格式无效")
     _text(value, "description", 1024, False)
     _text(value, "author", 80, False)
-    for key, low, high in (("versionCode", 1, 2147483647), ("apiVersion", 1, 1)):
+    for key, low, high in (("versionCode", 1, 2147483647), ("apiVersion", 1, 2)):
         if type(value.get(key)) is not int or not low <= value[key] <= high:
             raise Invalid("元数据整数字段无效：" + key)
+    runtime_api = value["apiVersion"] == 2
     caps = value.get("capabilities", [])
-    if not isinstance(caps, list) or len(caps) > 2 or any(not isinstance(cap, str) or cap not in ("settings", "systemui") for cap in caps) or len(set(caps)) != len(caps):
-        raise Invalid("capabilities 只能是唯一的 settings/systemui")
+    allowed = ("settings", "systemui", "runtime") if runtime_api else ("settings", "systemui")
+    if not isinstance(caps, list) or len(caps) > (len(allowed) if runtime_api else 2) or any(not isinstance(cap, str) or cap not in allowed for cap in caps) or len(set(caps)) != len(caps):
+        raise Invalid("capabilities 不受支持或重复")
+    if runtime_api and "runtime" not in caps:
+        raise Invalid("API 2 插件必须声明 runtime 能力")
+    if runtime_api and not catalog:
+        runtime = value.get("runtime")
+        if not isinstance(runtime, dict) or set(runtime) not in ({"entry"}, {"source"}):
+            raise Invalid("API 2 必须声明 runtime.entry 或 runtime.source")
+        if "entry" in runtime:
+            _text(runtime, "entry", 4096)
+            validate_path(runtime["entry"], 2)
+            if PurePosixPath(runtime["entry"]).suffix != ".js":
+                raise Invalid("runtime 入口必须为 .js")
+        else:
+            _text(runtime, "source", 2147483647)
+    elif not runtime_api and ("runtime" in value or "runtime" in caps):
+        raise Invalid("runtime 需要 API 2")
     if manifest:
-        _text(value, "entry", 128)
-        validate_path(value["entry"])
+        _text(value, "entry", 4096 if runtime_api else 128)
+        validate_path(value["entry"], value["apiVersion"])
         if PurePosixPath(value["entry"]).suffix != ".js":
             raise Invalid("入口必须为 .js")
 
 
-def validate_form(controls):
+def validate_form(controls, api_version=1):
     """Validate the builder's literal form; the host still checks actual JS output."""
-    if not isinstance(controls, list) or not 1 <= len(controls) <= 64:
-        raise Invalid("插件必须提供完整设置，ui 需包含 1–64 项控件")
+    if not isinstance(controls, list) or not controls or api_version == 1 and len(controls) > 64:
+        raise Invalid("插件必须提供完整设置；API 1 的 ui 需包含 1–64 项控件，API 2 不设总项数配额")
     keys, editable = set(), 0
     def number(value):
         try:
@@ -96,8 +115,10 @@ def validate_form(controls):
         if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "options", "value"}:
             raise Invalid("插件控件必须为对象且不能包含未知字段")
         kind = control.get("type")
-        if kind not in ("text", "switch", "slider", "input", "select", "button"):
+        if kind not in ("text", "switch", "slider", "input", "select", "button", "action", "status"):
             raise Invalid("不支持的插件控件类型")
+        if kind in ("action", "status") and (api_version != 2 or set(control) - {"type", "title", "description", "key"}):
+            raise Invalid("一次性操作与只读状态仅用于 API 2，不能包含持久配置字段")
         _text(control, "title", 120)
         _text(control, "description", 512, False)
         if "unit" in control:
@@ -110,6 +131,8 @@ def validate_form(controls):
         if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,63}", key) or key in ("constructor", "prototype") or key in keys:
             raise Invalid("插件配置 key 无效或重复")
         keys.add(key)
+        if kind in ("action", "status"):
+            continue
         if kind != "button":
             editable += 1
         default = control.get("default", False if kind == "switch" else control.get("min") if kind == "slider" else control.get("value", True) if kind == "button" else "")
@@ -141,7 +164,7 @@ def validate_form(controls):
         raise Invalid("插件必须提供完整设置，至少声明一个开关、滑块、输入框或选择项；只有说明或按钮不符合规范")
 
 
-def validate_source_form(source):
+def validate_source_form(source, api_version=1):
     matches = list(UI_RE.finditer(source))
     if len(matches) != 1:
         raise Invalid("标准构建器要求唯一的 plugin.ui = [严格 JSON 控件声明];，插件必须提供完整设置")
@@ -151,43 +174,49 @@ def validate_source_form(source):
         raise Invalid("标准构建器要求 plugin.ui 使用严格 JSON 数组；动态脚本请直接交宿主验证导入") from error
     if not source[end:].lstrip().startswith(";"):
         raise Invalid("plugin.ui 严格 JSON 数组后需要分号")
-    validate_form(controls)
+    validate_form(controls, api_version)
 
 
-def validate_path(name):
-    if not isinstance(name, str) or not name or len(name) > 128 or "\\" in name or "\0" in name:
+def validate_path(name, api_version=1):
+    maximum = 4096 if api_version == 2 else 128
+    if not isinstance(name, str) or not name or len(name) > maximum or "\\" in name or "\0" in name:
         raise Invalid("非法文件路径")
     path = PurePosixPath(name)
     if path.is_absolute() or ":" in name or any(part in ("", ".", "..") or part.endswith((".", " ")) for part in name.split("/")):
         raise Invalid("文件路径必须是无穿越的相对路径：" + name)
-    if name not in ("LICENSE", "plugin.json") and path.suffix not in ALLOWED_EXT:
+    if api_version == 1 and name not in ("LICENSE", "plugin.json") and path.suffix not in ALLOWED_EXT:
         raise Invalid("不支持的包内文件类型：" + name)
 
 
 def validate_files(files):
-    if not files or len(files) > MAX_FILES or sum(len(data) for data in files.values()) > MAX_TOTAL:
-        raise Invalid("插件超过 32 项或 1MiB 总容量")
+    if not files or "plugin.json" not in files:
+        raise Invalid("ZIP 根目录缺少 plugin.json")
+    manifest = decode_json(files["plugin.json"])
+    validate_metadata(manifest, True)
+    api_version = manifest["apiVersion"]
+    if api_version == 1 and (len(files) > MAX_FILES or sum(len(data) for data in files.values()) > MAX_TOTAL):
+        raise Invalid("API 1 插件超过 32 项或 1MiB 总容量")
     normalized = set()
     for name, data in files.items():
-        validate_path(name)
+        validate_path(name, api_version)
         canonical = name.lower()
         if canonical in normalized:
             raise Invalid("包内路径忽略大小写后重复：" + name)
         normalized.add(canonical)
-        if len(data) > MAX_FILE:
+        if api_version == 1 and len(data) > MAX_FILE:
             raise Invalid("单项文件超过 256KiB：" + name)
-        try:
-            text = data.decode("utf-8-sig")
-        except UnicodeError as error:
-            raise Invalid("包内所有文件必须是 UTF-8：" + name) from error
-        if "\0" in text:
-            raise Invalid("包内文本不能包含 NUL：" + name)
-    if "plugin.json" not in files:
-        raise Invalid("包根目录缺少 plugin.json")
-    manifest = decode_json(files["plugin.json"])
-    validate_metadata(manifest, True)
+        if api_version == 1 or name == "plugin.json" or name == manifest["entry"] or name.endswith(".js"):
+            try:
+                text = data.decode("utf-8-sig")
+            except UnicodeError as error:
+                raise Invalid("插件脚本或说明必须为 UTF-8：" + name) from error
+            if "\0" in text:
+                raise Invalid("插件文本不能包含 NUL：" + name)
     if manifest["entry"] not in files:
         raise Invalid("入口文件不存在：" + manifest["entry"])
+    runtime = manifest.get("runtime", {})
+    if "entry" in runtime and runtime["entry"] not in files:
+        raise Invalid("API 2 runtime 入口文件不存在：" + runtime["entry"])
     try:
         source = files[manifest["entry"]].decode("utf-8-sig")
     except UnicodeError as error:
@@ -207,7 +236,7 @@ def validate_files(files):
         raise Invalid("manifest 与 JavaScript 元数据头不一致")
     if not re.search(r"\bC17\s*\.\s*define\s*\(", source):
         raise Invalid("脚本没有 C17.define 声明")
-    validate_source_form(source)
+    validate_source_form(source, api_version)
     return manifest
 
 
@@ -215,16 +244,22 @@ def read_source(directory):
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise Invalid("源码目录不存在或为链接")
+    manifest_path = directory / "plugin.json"
+    if not manifest_path.is_file():
+        raise Invalid("包根目录缺少 plugin.json")
+    manifest = decode_json(manifest_path.read_bytes())
+    validate_metadata(manifest, True)
+    api_version = manifest["apiVersion"]
     files = {}
     for path in sorted(directory.rglob("*")):
         if path.is_symlink():
             raise Invalid("不接受符号链接：" + str(path))
         if path.is_file():
             name = path.relative_to(directory).as_posix()
-            validate_path(name)
-            if path.stat().st_size > MAX_FILE:
+            validate_path(name, api_version)
+            if api_version == 1 and path.stat().st_size > MAX_FILE:
                 raise Invalid("单项文件超过 256KiB：" + name)
-            if len(files) >= MAX_FILES:
+            if api_version == 1 and len(files) >= MAX_FILES:
                 raise Invalid("文件超过 32 项")
             files[name] = path.read_bytes()
     manifest = validate_files(files)
@@ -233,43 +268,97 @@ def read_source(directory):
 
 
 def archive_bytes(files):
+    if len(files) >= 65535:
+        raise Invalid("当前宿主支持经典 ZIP；文件数需能由非 ZIP64 档案表示")
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for name, data in sorted(files.items()):
-            item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            item.create_system = 3
-            item.external_attr = (stat.S_IFREG | 0o644) << 16
-            item.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(item, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+    try:
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9, allowZip64=False) as archive:
+            for name, data in sorted(files.items()):
+                item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                item.create_system = 3
+                item.external_attr = (stat.S_IFREG | 0o644) << 16
+                item.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(item, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+    except zipfile.LargeZipFile as error:
+        raise Invalid("当前宿主支持经典 ZIP，包超出档案格式范围") from error
     data = buffer.getvalue()
     inspect_archive(data)
     return data
 
 
+def validate_zip_structure(data):
+    """Match the host's classic ZIP format, including local/central header identity."""
+    def field(offset, kind):
+        size = struct.calcsize(kind)
+        if offset < 0 or offset + size > len(data):
+            raise Invalid("ZIP 文件头截断")
+        return struct.unpack_from(kind, data, offset)[0]
+    end = -1
+    for position in range(len(data) - 22, max(-1, len(data) - 65558), -1):
+        if field(position, "<I") == 0x06054b50 and position + 22 + field(position + 20, "<H") == len(data):
+            end = position
+            break
+    if end < 0 or field(end + 4, "<H") or field(end + 6, "<H"):
+        raise Invalid("ZIP 不完整或不支持分卷")
+    count, size, offset = field(end + 10, "<H"), field(end + 12, "<I"), field(end + 16, "<I")
+    if count == 65535 or size == 0xffffffff or offset == 0xffffffff:
+        raise Invalid("当前宿主不支持 ZIP64，请重新打包为经典 ZIP")
+    if not count or field(end + 8, "<H") != count or offset + size != end:
+        raise Invalid("ZIP 目录无效")
+    cursor, used_offsets = offset, set()
+    for _ in range(count):
+        if cursor + 46 > end or field(cursor, "<I") != 0x02014b50:
+            raise Invalid("ZIP 中央目录无效")
+        flags, method = field(cursor + 8, "<H"), field(cursor + 10, "<H")
+        compressed, plain, local = field(cursor + 20, "<I"), field(cursor + 24, "<I"), field(cursor + 42, "<I")
+        name_size, extra_size, comment_size = field(cursor + 28, "<H"), field(cursor + 30, "<H"), field(cursor + 32, "<H")
+        if compressed == 0xffffffff or plain == 0xffffffff or local == 0xffffffff:
+            raise Invalid("当前宿主不支持 ZIP64，请重新打包为经典 ZIP")
+        if (flags & 1 or method not in (0, 8) or field(cursor + 34, "<H") or local + 30 > offset
+                or local in used_offsets or cursor + 46 + name_size + extra_size + comment_size > end):
+            raise Invalid("ZIP 不支持加密、分卷、重复偏移或无效压缩目录")
+        used_offsets.add(local)
+        if (field(local, "<I") != 0x04034b50 or field(local + 6, "<H") != flags
+                or field(local + 8, "<H") != method or field(local + 26, "<H") != name_size):
+            raise Invalid("ZIP 本地文件头与目录不一致")
+        if local + 30 + name_size + field(local + 28, "<H") + compressed > offset:
+            raise Invalid("ZIP 条目边界无效")
+        if data[local + 30:local + 30 + name_size] != data[cursor + 46:cursor + 46 + name_size]:
+            raise Invalid("ZIP 本地文件名与目录不一致")
+        cursor += 46 + name_size + extra_size + comment_size
+    if cursor != end:
+        raise Invalid("ZIP 目录长度无效")
+
+
 def inspect_archive(data):
-    if len(data) > MAX_TOTAL:
-        raise Invalid("ZIP 文件超过 1MiB")
+    validate_zip_structure(data)
     files = {}
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            if len(archive.infolist()) > MAX_FILES:
-                raise Invalid("ZIP 条目超过 32 项")
+            try:
+                manifest = decode_json(archive.read("plugin.json"))
+            except KeyError as error:
+                raise Invalid("ZIP 根目录缺少 plugin.json") from error
+            validate_metadata(manifest, True)
+            api_version = manifest["apiVersion"]
+            if api_version == 1 and (len(data) > MAX_TOTAL or len(archive.infolist()) > MAX_FILES):
+                raise Invalid("API 1 ZIP 超过 1MiB 或 32 项")
             total = 0
             for item in archive.infolist():
-                validate_path(item.filename)
+                validate_path(item.filename, api_version)
                 mode = item.external_attr >> 16
                 if item.filename in files or item.is_dir() or stat.S_ISLNK(mode) or stat.S_IFMT(mode) not in (0, stat.S_IFREG) or item.flag_bits & 1:
                     raise Invalid("ZIP 含重复条目、目录、链接或加密条目")
                 if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                     raise Invalid("ZIP 仅支持 stored/deflate 压缩")
                 total += item.file_size
-                if item.file_size > MAX_FILE or total > MAX_TOTAL:
+                if api_version == 1 and (item.file_size > MAX_FILE or total > MAX_TOTAL):
                     raise Invalid("ZIP 解压容量超限")
-                if item.file_size > 65536 and item.file_size > max(1, item.compress_size) * 200:
+                if api_version == 1 and item.file_size > 65536 and item.file_size > max(1, item.compress_size) * 200:
                     raise Invalid("ZIP 条目压缩比超过 200")
                 with archive.open(item) as stream:
-                    content = stream.read(MAX_FILE + 1)
-                if len(content) > MAX_FILE or len(content) != item.file_size:
+                    content = stream.read() if api_version == 2 else stream.read(MAX_FILE + 1)
+                if api_version == 1 and len(content) > MAX_FILE or len(content) != item.file_size:
                     raise Invalid("ZIP 条目大小无效")
                 files[item.filename] = content
     except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
@@ -286,15 +375,14 @@ def build(directory, out):
     checksum = hashlib.sha256(data).hexdigest()
     (out / filename).write_bytes(data)
     (out / (filename + ".sha256")).write_text(f"{checksum}  {filename}\n", encoding="utf-8", newline="\n")
-    entry = dict(manifest)
-    entry.pop("entry")
+    entry = {key: value for key, value in manifest.items() if key not in ("entry", "runtime")}
     entry.update(file=filename, sha256=checksum, size=len(data))
     return entry
 
 
 def validate_catalog(catalog):
     allowed = {"schemaVersion", "apiVersion", "plugins", "name", "description", "updatedAt", "readmeUrl", "changesUrl"}
-    if not isinstance(catalog, dict) or set(catalog) - allowed or type(catalog.get("schemaVersion")) is not int or catalog["schemaVersion"] != 1 or type(catalog.get("apiVersion")) is not int or catalog["apiVersion"] != 1:
+    if not isinstance(catalog, dict) or set(catalog) - allowed or type(catalog.get("schemaVersion")) is not int or catalog["schemaVersion"] != 1 or type(catalog.get("apiVersion")) is not int or catalog["apiVersion"] not in (1, 2):
         raise Invalid("目录格式或 API 版本无效")
     entries = catalog.get("plugins")
     if not isinstance(entries, list) or len(entries) > 128:
@@ -303,7 +391,9 @@ def validate_catalog(catalog):
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) - (META_FIELDS | {"file", "sha256", "size"}):
             raise Invalid("目录条目有未知字段")
-        validate_metadata({key: value for key, value in entry.items() if key in META_FIELDS})
+        validate_metadata({key: value for key, value in entry.items() if key in META_FIELDS}, catalog=True)
+        if entry["apiVersion"] > catalog["apiVersion"]:
+            raise Invalid("目录 API 版本不能低于插件 API 版本")
         if entry["id"] in seen:
             raise Invalid("索引包含重复插件 ID")
         seen.add(entry["id"])
@@ -312,7 +402,8 @@ def validate_catalog(catalog):
             raise Invalid("目录 file 必须为安全相对 ZIP 路径")
         if not isinstance(entry.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]):
             raise Invalid("目录 SHA-256 无效")
-        if type(entry.get("size")) is not int or not 1 <= entry["size"] <= MAX_TOTAL:
+        maximum = MAX_TOTAL if entry["apiVersion"] == 1 else 2147483647
+        if type(entry.get("size")) is not int or not 1 <= entry["size"] <= maximum:
             raise Invalid("目录 ZIP 大小无效")
     for key in allowed - {"schemaVersion", "apiVersion", "plugins"}:
         if key in catalog and (not isinstance(catalog[key], str) or len(catalog[key]) > 4096 or "\0" in catalog[key]):
@@ -327,7 +418,7 @@ def write_index(entries, out, metadata=None):
     entries = sorted(entries, key=lambda value: value["id"])
     out = Path(out)
     catalog = dict(metadata or {})
-    catalog.update(schemaVersion=1, apiVersion=1, plugins=entries)
+    catalog.update(schemaVersion=1, apiVersion=max((entry["apiVersion"] for entry in entries), default=1), plugins=entries)
     validate_catalog(catalog)
     data = json_bytes(catalog)
     (out / "index.json").write_bytes(data)
@@ -384,8 +475,6 @@ def main(argv=None):
             archive_bytes(files)
             print("结构通过：" + manifest["id"] + "；JavaScript 语义仍由 C17 校验")
         elif args.command == "inspect":
-            if args.source.stat().st_size > MAX_TOTAL:
-                raise Invalid("ZIP 文件超过 1MiB")
             manifest = inspect_archive(args.source.read_bytes())
             print("ZIP 结构通过：" + manifest["id"])
         elif args.command == "catalog":

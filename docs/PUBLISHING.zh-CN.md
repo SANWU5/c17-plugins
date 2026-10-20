@@ -19,6 +19,8 @@ python tools/pack.py catalog index.json
 
 完成源码、版权和目标 ROM 审查后，开发目录必须含 LICENSE、README.md、plugin.json、main.js 与真实作者。README 应列出来源、许可、最低宿主/API、适配版本、限制、撤销方法和变更记录。
 
+使用 `action/status` 表单或 `C17.onAction/publishStatus` 时，最低宿主须写为 2.1.0_beta.008 / code206 或更高；不能仅写 API 2，因为 code205 不接受这两类控件。当前 manifest 和目录没有最低宿主字段，不要添加未知字段。旧宿主需要继续发布不含新控件的独立兼容版本，并清楚标注适用范围。
+
 ```powershell
 python tools/pack.py lint D:/my-plugin
 python tools/pack.py publish D:/my-plugin --repository .

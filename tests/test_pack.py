@@ -3,7 +3,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import stat
+import struct
 import tempfile
 import shutil
 import unittest
@@ -20,6 +22,26 @@ SPEC.loader.exec_module(pack)
 class PackagingTests(unittest.TestCase):
     def files(self):
         return pack.read_source(ROOT / "templates" / "clock-seconds")[0]
+
+    def api2_files(self):
+        metadata = {
+            "id": "example.runtime.plugin", "name": "Runtime plugin", "version": "1.0.0",
+            "versionCode": 1, "apiVersion": 2, "description": "API 2 package fixture",
+            "author": "C17 test", "capabilities": ["runtime"],
+            "runtime": {"entry": "runtime.js"},
+        }
+        ui = [{"type": "switch", "key": "enabled", "title": "Enable", "default": False}]
+        source = ("var plugin = " + json.dumps(metadata, ensure_ascii=False) + ";\n"
+                  + "plugin.ui = " + json.dumps(ui) + ";\n"
+                  + "plugin.settings = {}; plugin.hooks = []; C17.define(plugin);\n")
+        manifest = dict(metadata, entry="main.js")
+        files = {
+            "plugin.json": pack.json_bytes(manifest), "main.js": source.encode("utf-8"),
+            "runtime.js": b"C17.log('API 2 runtime');", "classes.dex": b"dex\\n\\0" + os.urandom(pack.MAX_TOTAL + 1),
+            "README.md": b"API 2 fixture", "LICENSE": b"test license",
+        }
+        files.update({f"resources/data-{index}.bin": os.urandom(1) for index in range(40)})
+        return files, manifest
 
     def mutate_manifest(self, files, **values):
         manifest = pack.decode_json(files["plugin.json"])
@@ -80,6 +102,80 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(pack.Invalid):
             pack.validate_files(self.mutate_manifest(self.files(), apiVersion=2))
 
+    def test_api2_accepts_unrestricted_binary_package_resources(self):
+        files, manifest = self.api2_files()
+        self.assertEqual(manifest, pack.validate_files(files))
+        data = pack.archive_bytes(files)
+        self.assertEqual(manifest, pack.inspect_archive(data))
+        self.assertGreater(len(data), pack.MAX_TOTAL)
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "runtime-plugin"
+            source.mkdir()
+            for name, content in files.items():
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            reread, read_manifest = pack.read_source(source)
+            self.assertEqual(manifest, read_manifest)
+            self.assertEqual(files["classes.dex"], reread["classes.dex"])
+
+    def test_api2_catalog_allows_java_array_sized_packages(self):
+        files, manifest = self.api2_files()
+        entry = {key: value for key, value in manifest.items() if key not in ("entry", "runtime")}
+        entry.update(file="packages/runtime.zip", sha256="a" * 64, size=pack.MAX_TOTAL + 1)
+        catalog = {"schemaVersion": 1, "apiVersion": 2, "plugins": [entry]}
+        self.assertEqual(catalog, pack.validate_catalog(catalog))
+
+    def test_api2_complete_form_is_not_limited_to_64_items(self):
+        controls = [{"type": "switch", "key": f"setting_{index}", "title": f"Setting {index}"} for index in range(80)]
+        pack.validate_source_form("plugin.ui = " + json.dumps(controls) + ";", api_version=2)
+        with self.assertRaisesRegex(pack.Invalid, "API 1"):
+            pack.validate_form(controls)
+
+    def test_api2_long_metadata_entry_path_matches_host(self):
+        files, manifest = self.api2_files()
+        entry = "resources/" + "nested/" * 20 + "main.js"
+        manifest["entry"] = entry
+        files[entry] = files.pop("main.js")
+        files["plugin.json"] = pack.json_bytes(manifest)
+        self.assertGreater(len(entry), 128)
+        self.assertEqual(manifest, pack.validate_files(files))
+
+    def test_api2_runtime_and_capability_are_both_required(self):
+        _, manifest = self.api2_files()
+        for changed in (dict(manifest, capabilities=[]), {key: value for key, value in manifest.items() if key != "runtime"},
+                        dict(manifest, runtime={"source": "  "}), dict(manifest, runtime={"entry": "runtime.js", "source": "code"})):
+            with self.subTest(manifest=changed), self.assertRaises(pack.Invalid):
+                pack.validate_metadata(changed, manifest=True)
+
+    def test_api2_build_catalog_strips_private_runtime_source(self):
+        files, manifest = self.api2_files()
+        manifest["runtime"] = {"source": "C17.log('must stay inside package');"}
+        files["plugin.json"] = pack.json_bytes(manifest)
+        meta = {key: value for key, value in manifest.items() if key != "entry"}
+        files["main.js"] = ("var plugin = " + json.dumps(meta) + ";\nplugin.ui = "
+                            + json.dumps([{"type": "switch", "key": "enabled", "title": "Enable"}])
+                            + ";\nC17.define(plugin);").encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            source, out = Path(temporary) / "source", Path(temporary) / "out"
+            source.mkdir()
+            for name, content in files.items():
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            entry = pack.build(source, out)
+            self.assertNotIn("runtime", entry)
+            self.assertNotIn("entry", entry)
+            pack.write_index([entry], out)
+            catalog = pack.decode_json((out / "index.json").read_bytes())
+            self.assertEqual(2, catalog["apiVersion"])
+            self.assertNotIn("must stay inside package", json.dumps(catalog))
+            for field, value in (("runtime", {"source": "code"}), ("entry", "runtime.js")):
+                with self.subTest(field=field), self.assertRaises(pack.Invalid):
+                    pack.validate_catalog(dict(catalog, plugins=[dict(entry, **{field: value})]))
+            with self.assertRaisesRegex(pack.Invalid, "不能低于"):
+                pack.validate_catalog(dict(catalog, apiVersion=1))
+
     def test_duplicate_capabilities_are_rejected(self):
         with self.assertRaises(pack.Invalid):
             pack.validate_files(self.mutate_manifest(self.files(), capabilities=["settings", "settings"]))
@@ -120,6 +216,23 @@ class PackagingTests(unittest.TestCase):
     def test_zip_traversal_is_rejected(self):
         with self.assertRaises(pack.Invalid):
             pack.inspect_archive(self.zip_bytes(list(self.files().items()) + [("../bad.js", b"bad")]))
+
+    def test_zip_format_boundary_and_header_identity_match_host(self):
+        data = bytearray(self.zip_bytes(list(self.files().items())))
+        end = data.rfind(b"PK\x05\x06")
+        malformed = []
+        split = bytearray(data)
+        struct.pack_into("<H", split, end + 4, 1)
+        malformed.append(split)
+        zip64 = bytearray(data)
+        struct.pack_into("<H", zip64, end + 10, 65535)
+        malformed.append(zip64)
+        renamed = bytearray(data)
+        renamed[30] ^= 1
+        malformed.append(renamed)
+        for changed in malformed:
+            with self.subTest(header=changed[:32]), self.assertRaises(pack.Invalid):
+                pack.inspect_archive(changed)
 
     def test_case_insensitive_duplicate_paths_are_rejected(self):
         with self.assertRaisesRegex(pack.Invalid, "重复"):
@@ -196,6 +309,36 @@ class PackagingTests(unittest.TestCase):
                         {"type": "select", "title": "模式", "key": "mode", "options": [{"value": "a", "label": "A"}], "default": "b"}):
             with self.subTest(control=control), self.assertRaises(pack.Invalid):
                 pack.validate_form([control])
+
+    def test_runtime_form_controls_do_not_define_persisted_state(self):
+        controls = [{"type": "switch", "title": "配置", "key": "enabled"},
+                    {"type": "action", "title": "执行", "key": "capture"},
+                    {"type": "status", "title": "保存时间", "key": "saved_at"}]
+        pack.validate_form(controls, 2)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form(controls, 1)
+        with self.assertRaisesRegex(pack.Invalid, "完整设置"):
+            pack.validate_form(controls[1:], 2)
+        for kind in ("action", "status"):
+            for field, value in (("default", True), ("value", 1), ("options", []), ("min", 0),
+                                 ("max", 1), ("step", 1), ("unit", "%")):
+                with self.subTest(kind=kind, field=field), self.assertRaises(pack.Invalid):
+                    pack.validate_form(controls[:1] + [{"type": kind, "title": "运行", "key": "runtime", field: value}], 2)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form(controls[:2] + [{"type": "status", "title": "重复", "key": "capture"}], 2)
+
+    def test_api2_runtime_form_package_roundtrips_without_executing_action(self):
+        files, manifest = self.api2_files()
+        controls = [{"type": "switch", "title": "Enable", "key": "enabled"},
+                    {"type": "action", "title": "Capture", "key": "capture"},
+                    {"type": "status", "title": "Saved time", "key": "saved_at"}]
+        source = files["main.js"].decode("utf-8")
+        start = source.index("plugin.ui = ")
+        end = source.index(";\n", start) + 1
+        files["main.js"] = (source[:start] + "plugin.ui = " + json.dumps(controls) + ";" + source[end:]).encode("utf-8")
+        files["runtime.js"] = b"C17.onAction('capture', function () { throw new Error('must not execute at build'); });"
+        self.assertEqual(manifest, pack.validate_files(files))
+        self.assertEqual(manifest, pack.inspect_archive(pack.archive_bytes(files)))
 
     def test_builder_requires_literal_ui_without_running_script(self):
         for source in ("plugin.ui = makeUntrustedForm();", "throw new Error('must not run');", "plugin.ui = []; plugin.ui = [];", 'plugin.ui = [{"type":"input","title":"文字","key":"label","default":NaN}];'):

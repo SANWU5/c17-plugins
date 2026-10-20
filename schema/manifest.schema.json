@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:c17:plugin-manifest:1",
-  "title": "C17 API 1 ZIP plugin.json",
+  "title": "C17 API 1/2 ZIP plugin.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "version", "versionCode", "apiVersion", "entry"],
@@ -10,11 +10,27 @@
     "name": {"type": "string", "minLength": 1, "maxLength": 80},
     "version": {"type": "string", "minLength": 1, "maxLength": 32},
     "versionCode": {"type": "integer", "minimum": 1, "maximum": 2147483647},
-    "apiVersion": {"const": 1},
+    "apiVersion": {"enum": [1, 2]},
     "description": {"type": "string", "maxLength": 1024},
     "author": {"type": "string", "maxLength": 80},
-    "capabilities": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["settings", "systemui"]}},
-    "entry": {"type": "string", "minLength": 4, "maxLength": 128, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\:])(?!.*//).+\\.js$"}
+    "capabilities": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"enum": ["settings", "systemui", "runtime"]}},
+    "entry": {"type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\:])(?!.*//).+\\.js$"},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entry": {"type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\:])(?!.*//).+\\.js$"},
+        "source": {"type": "string", "minLength": 1, "pattern": "\\S"}
+      },
+      "oneOf": [
+        {"required": ["entry"], "not": {"required": ["source"]}},
+        {"required": ["source"], "not": {"required": ["entry"]}}
+      ]
+    }
   },
-  "$comment": "宿主额外检查NUL、空白名称、UTF-8、ZIP路径、容量、元数据身份及脚本语义。"
+  "allOf": [
+    {"if": {"properties": {"apiVersion": {"const": 1}}, "required": ["apiVersion"]}, "then": {"properties": {"entry": {"maxLength": 128}, "capabilities": {"maxItems": 2, "items": {"enum": ["settings", "systemui"]}}}, "not": {"required": ["runtime"]}}},
+    {"if": {"properties": {"apiVersion": {"const": 2}}, "required": ["apiVersion"]}, "then": {"required": ["runtime", "capabilities"], "properties": {"capabilities": {"contains": {"const": "runtime"}}}}}
+  ],
+  "$comment": "宿主额外检查NUL、UTF-8元数据、包路径、版本与身份一致性。API 1 文本及容量限制仅适用于 API 1；API 2 的 runtime.entry 是 JS 执行入口，其余资源可为任意合法二进制内容。"
 }
