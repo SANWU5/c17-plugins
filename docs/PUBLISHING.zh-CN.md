@@ -19,7 +19,9 @@ python tools/pack.py catalog index.json
 
 完成源码、版权和目标 ROM 审查后，开发目录必须含 LICENSE、README.md、plugin.json、main.js 与真实作者。README 应列出来源、许可、最低宿主/API、适配版本、限制、撤销方法和变更记录。
 
-使用 `action/status` 表单或 `C17.onAction/publishStatus` 时，最低宿主须写为 2.1.0_beta.008 / code206 或更高；不能仅写 API 2，因为 code205 不接受这两类控件。当前 manifest 和目录没有最低宿主字段，不要添加未知字段。旧宿主需要继续发布不含新控件的独立兼容版本，并清楚标注适用范围。
+使用 `action/status` 表单或 `C17.onAction/publishStatus` 时，最低宿主须写为 2.1.0_beta.008 / code206 或更高；不能仅写 API 2，因为 code205 不接受这两类控件。code210 起可在 manifest 与真实描述中一致声明整数 `minimumHost`、所需 `features`、`usage/scopes` 及 API 2 `nativeSettings`；这些新字段不放进旧目录。控件 `section/group` 也需要识别新契约的宿主。旧宿主继续使用不含新字段/控件的兼容包，清楚标注适用范围；普通业务更新只增加插件自己的版本，不应无故要求同步升级宿主。
+
+发布前核对详情三段：使用说明与声明作用域（实际勾选无法读取时为未知）、完整功能与设置、管理。当前 runtime 与系统规则只在 SystemUI 执行；框架勾选其他应用不会让插件自动拥有该应用的执行引擎。原生设置 DEX/JAR 必须实际随包提供，固定 View/异步状态桥接 ABI 见 [SDK](SDK.zh-CN.md#原生设置入口)，仅列出字段或通过 schema 不等于实际界面验收。
 
 ```powershell
 python tools/pack.py lint D:/my-plugin

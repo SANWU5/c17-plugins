@@ -86,11 +86,60 @@ class SchemaParityTests(unittest.TestCase):
                 with self.subTest(api=api, ui=ui):
                     self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(api), ui=ui)))
 
+    def test_detail_metadata_and_groups_are_optional_for_both_apis(self):
+        for api in (1, 2):
+            extra = {"minimumHost": 210, "features": ["ui.groups", "scope.systemui"],
+                     "usage": "先启用，再修改功能设置。", "scopes": ["com.android.systemui", "android"]}
+            manifest, descriptor = dict(self.metadata(api), entry="main.js", **extra), dict(self.descriptor(api), **extra)
+            descriptor["ui"][0].update(section="features", group="显示")
+            for name, value in (("manifest", manifest), ("descriptor", descriptor)):
+                self.validators[name].validate(value)
+                for field, invalid in (("minimumHost", True), ("minimumHost", 0), ("minimumHost", 2147483648),
+                                       ("usage", "x" * 4097), ("features", ["runtime.dex"] * 2),
+                                       ("features", ["bad feature"]), ("features", ["x" * 81]),
+                                       ("features", ["f" + str(index) for index in range(65)]),
+                                       ("scopes", ["systemui"]), ("scopes", ["com.android:remote"]),
+                                       ("scopes", ["com." + "x" * 237]),
+                                       ("scopes", ["com.android.systemui"] * 2)):
+                    with self.subTest(api=api, schema=name, field=field):
+                        self.assertFalse(self.validators[name].is_valid(dict(value, **{field: invalid})))
+            for field, invalid in (("section", "overview"), ("group", "x" * 121), ("group", [])):
+                with self.subTest(api=api, field=field):
+                    controls = [dict(descriptor["ui"][0], **{field: invalid})]
+                    self.assertFalse(self.validators["descriptor"].is_valid(dict(descriptor, ui=controls)))
+
+    def test_native_settings_is_an_api2_setting_entry_and_not_a_catalog_field(self):
+        native = {"dex": "settings/classes.dex", "className": "example.plugin.Settings$Entry"}
+        for name, value in (("manifest", dict(self.metadata(), entry="main.js")), ("descriptor", self.descriptor())):
+            self.validators[name].validate(dict(value, nativeSettings=native))
+            legacy = dict(self.metadata(1), entry="main.js") if name == "manifest" else self.descriptor(1)
+            self.assertFalse(self.validators[name].is_valid(dict(legacy, nativeSettings=native)))
+            for invalid in ({"dex": "../bad.dex", "className": native["className"]},
+                            {"dex": "settings.js", "className": native["className"]},
+                            {"dex": "设置.dex", "className": native["className"]},
+                            {"dex": "my settings.jar", "className": native["className"]},
+                            {"dex": "settings.jar", "className": "Settings"},
+                            {"dex": "settings.jar", "className": "example.Bad-Class"},
+                            dict(native, method="other")):
+                with self.subTest(schema=name, native=invalid):
+                    self.assertFalse(self.validators[name].is_valid(dict(value, nativeSettings=invalid)))
+        self.validators["descriptor"].validate(dict(self.descriptor(), nativeSettings=native, ui=[]))
+        self.validators["descriptor"].validate(dict(self.descriptor(), nativeSettings=native, ui=[{"type": "text", "title": "原生设置入口"}]))
+        for field, value in (("minimumHost", 210), ("features", ["ui.groups"]), ("usage", "说明"),
+                             ("scopes", ["com.android.systemui"]), ("nativeSettings", native)):
+            with self.subTest(field=field):
+                catalog = {"schemaVersion": 1, "apiVersion": 2, "plugins": [self.entry(**{field: value})]}
+                self.assertFalse(self.validators["catalog"].is_valid(catalog))
+
     def test_runtime_actions_and_status_are_not_saved_state(self):
         controls = [{"type": "switch", "title": "Enabled", "key": "enabled"},
                     {"type": "action", "title": "Capture", "key": "capture"},
                     {"type": "status", "title": "Saved time", "key": "saved_at"}]
         self.validators["descriptor"].validate(dict(self.descriptor(), ui=controls))
+        grouped = copy.deepcopy(controls)
+        grouped[1].update(section="management", group="数据")
+        grouped[2].update(section="management", group="数据")
+        self.validators["descriptor"].validate(dict(self.descriptor(), ui=grouped))
         self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(1), ui=controls)))
         self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=controls[1:])))
         for kind in ("action", "status"):

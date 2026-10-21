@@ -19,9 +19,11 @@ MAX_TOTAL = 1024 * 1024
 MAX_FILES = 32
 ROOT = Path(__file__).resolve().parents[1]
 META_FIELDS = {"id", "name", "version", "versionCode", "apiVersion", "description", "author", "capabilities"}
-PLUGIN_FIELDS = META_FIELDS | {"runtime"}
+PLUGIN_FIELDS = META_FIELDS | {"runtime", "minimumHost", "features", "usage", "scopes", "nativeSettings"}
 MANIFEST_FIELDS = PLUGIN_FIELDS | {"entry"}
 ID_RE = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
+SCOPE_RE = re.compile(r"(?:android|[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)\Z")
+CLASS_RE = re.compile(r"[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)+\Z")
 HEADER_RE = re.compile(r"^\s*var\s+plugin\s*=\s*", re.MULTILINE)
 UI_RE = re.compile(r"^\s*plugin\s*\.\s*ui\s*=\s*", re.MULTILINE)
 ALLOWED_EXT = {".js", ".md", ".txt"}
@@ -69,10 +71,28 @@ def validate_metadata(value, manifest=False, catalog=False):
         raise Invalid("插件 ID 格式无效")
     _text(value, "description", 1024, False)
     _text(value, "author", 80, False)
+    _text(value, "usage", 4096, False)
+    if "minimumHost" in value and (type(value["minimumHost"]) is not int or not 1 <= value["minimumHost"] <= 2147483647):
+        raise Invalid("minimumHost 必须为有效的宿主 versionCode 整数")
+    for key, pattern, maximum in (("features", ID_RE, 80), ("scopes", SCOPE_RE, 240)):
+        if key not in value:
+            continue
+        entries = value[key]
+        if not isinstance(entries, list) or len(entries) > 64 or any(not isinstance(item, str) or len(item) > maximum or not pattern.fullmatch(item) for item in entries) or len(set(entries)) != len(entries):
+            raise Invalid(key + " 必须为至多 64 个唯一且有效的声明")
     for key, low, high in (("versionCode", 1, 2147483647), ("apiVersion", 1, 2)):
         if type(value.get(key)) is not int or not low <= value[key] <= high:
             raise Invalid("元数据整数字段无效：" + key)
     runtime_api = value["apiVersion"] == 2
+    if "nativeSettings" in value:
+        native = value["nativeSettings"]
+        if not runtime_api or not isinstance(native, dict) or set(native) != {"dex", "className"}:
+            raise Invalid("nativeSettings 仅用于 API 2，且必须声明 dex 和 className")
+        _text(native, "dex", 4096)
+        _text(native, "className", 240)
+        validate_path(native["dex"], 2)
+        if not re.fullmatch(r"[a-zA-Z0-9_./-]+\.(?:dex|jar)", native["dex"]) or not CLASS_RE.fullmatch(native["className"]):
+            raise Invalid("原生设置需要安全的 .dex/.jar 路径与完整 Java 类名")
     caps = value.get("capabilities", [])
     allowed = ("settings", "systemui", "runtime") if runtime_api else ("settings", "systemui")
     if not isinstance(caps, list) or len(caps) > (len(allowed) if runtime_api else 2) or any(not isinstance(cap, str) or cap not in allowed for cap in caps) or len(set(caps)) != len(caps):
@@ -99,9 +119,11 @@ def validate_metadata(value, manifest=False, catalog=False):
             raise Invalid("入口必须为 .js")
 
 
-def validate_form(controls, api_version=1):
+def validate_form(controls, api_version=1, native_settings=False):
     """Validate the builder's literal form; the host still checks actual JS output."""
-    if not isinstance(controls, list) or not controls or api_version == 1 and len(controls) > 64:
+    if native_settings and api_version != 2:
+        raise Invalid("原生设置入口需要 API 2")
+    if not isinstance(controls, list) or not controls and not native_settings or api_version == 1 and len(controls) > 64:
         raise Invalid("插件必须提供完整设置；API 1 的 ui 需包含 1–64 项控件，API 2 不设总项数配额")
     keys, editable = set(), 0
     def number(value):
@@ -112,15 +134,18 @@ def validate_form(controls, api_version=1):
     def primitive(value):
         return type(value) is bool or isinstance(value, str) and len(value) <= 4096 and "\0" not in value or number(value)
     for control in controls:
-        if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "options", "value"}:
+        if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "options", "value", "section", "group"}:
             raise Invalid("插件控件必须为对象且不能包含未知字段")
         kind = control.get("type")
         if kind not in ("text", "switch", "slider", "input", "select", "button", "action", "status"):
             raise Invalid("不支持的插件控件类型")
-        if kind in ("action", "status") and (api_version != 2 or set(control) - {"type", "title", "description", "key"}):
+        if kind in ("action", "status") and (api_version != 2 or set(control) - {"type", "title", "description", "key", "section", "group"}):
             raise Invalid("一次性操作与只读状态仅用于 API 2，不能包含持久配置字段")
         _text(control, "title", 120)
         _text(control, "description", 512, False)
+        _text(control, "group", 120, False)
+        if "section" in control and control["section"] not in ("features", "management"):
+            raise Invalid("控件 section 只能为 features 或 management")
         if "unit" in control:
             if kind != "slider":
                 raise Invalid("只有滑块可以声明显示单位")
@@ -160,11 +185,11 @@ def validate_form(controls, api_version=1):
                 raise Invalid("滑块范围、步长或默认值无效")
         if kind == "button" and not primitive(control.get("value", True)):
             raise Invalid("按钮值必须为文字、有限数字或布尔值")
-    if editable == 0:
+    if editable == 0 and not native_settings:
         raise Invalid("插件必须提供完整设置，至少声明一个开关、滑块、输入框或选择项；只有说明或按钮不符合规范")
 
 
-def validate_source_form(source, api_version=1):
+def validate_source_form(source, api_version=1, native_settings=False):
     matches = list(UI_RE.finditer(source))
     if len(matches) != 1:
         raise Invalid("标准构建器要求唯一的 plugin.ui = [严格 JSON 控件声明];，插件必须提供完整设置")
@@ -174,7 +199,7 @@ def validate_source_form(source, api_version=1):
         raise Invalid("标准构建器要求 plugin.ui 使用严格 JSON 数组；动态脚本请直接交宿主验证导入") from error
     if not source[end:].lstrip().startswith(";"):
         raise Invalid("plugin.ui 严格 JSON 数组后需要分号")
-    validate_form(controls, api_version)
+    validate_form(controls, api_version, native_settings)
 
 
 def validate_path(name, api_version=1):
@@ -217,6 +242,9 @@ def validate_files(files):
     runtime = manifest.get("runtime", {})
     if "entry" in runtime and runtime["entry"] not in files:
         raise Invalid("API 2 runtime 入口文件不存在：" + runtime["entry"])
+    native = manifest.get("nativeSettings")
+    if native is not None and native["dex"] not in files:
+        raise Invalid("原生设置 DEX/JAR 文件不存在：" + native["dex"])
     try:
         source = files[manifest["entry"]].decode("utf-8-sig")
     except UnicodeError as error:
@@ -236,7 +264,7 @@ def validate_files(files):
         raise Invalid("manifest 与 JavaScript 元数据头不一致")
     if not re.search(r"\bC17\s*\.\s*define\s*\(", source):
         raise Invalid("脚本没有 C17.define 声明")
-    validate_source_form(source, api_version)
+    validate_source_form(source, api_version, native is not None)
     return manifest
 
 
@@ -375,7 +403,7 @@ def build(directory, out):
     checksum = hashlib.sha256(data).hexdigest()
     (out / filename).write_bytes(data)
     (out / (filename + ".sha256")).write_text(f"{checksum}  {filename}\n", encoding="utf-8", newline="\n")
-    entry = {key: value for key, value in manifest.items() if key not in ("entry", "runtime")}
+    entry = {key: value for key, value in manifest.items() if key in META_FIELDS}
     entry.update(file=filename, sha256=checksum, size=len(data))
     return entry
 

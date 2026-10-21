@@ -15,6 +15,11 @@
     "author": {"type": "string", "maxLength": 80},
     "capabilities": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"enum": ["settings", "systemui", "runtime"]}},
     "entry": {"type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\:])(?!.*//).+\\.js$"},
+    "minimumHost": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "features": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "maxLength": 80, "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"}},
+    "usage": {"type": "string", "maxLength": 4096},
+    "scopes": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^(?:android|[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)+)$", "maxLength": 240}},
+    "nativeSettings": {"type": "object", "additionalProperties": false, "required": ["dex", "className"], "properties": {"dex": {"type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[a-zA-Z0-9_./-]+\\.(?:dex|jar)$"}, "className": {"type": "string", "maxLength": 240, "pattern": "^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)+$"}}},
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -29,8 +34,8 @@
     }
   },
   "allOf": [
-    {"if": {"properties": {"apiVersion": {"const": 1}}, "required": ["apiVersion"]}, "then": {"properties": {"entry": {"maxLength": 128}, "capabilities": {"maxItems": 2, "items": {"enum": ["settings", "systemui"]}}}, "not": {"required": ["runtime"]}}},
+    {"if": {"properties": {"apiVersion": {"const": 1}}, "required": ["apiVersion"]}, "then": {"properties": {"entry": {"maxLength": 128}, "capabilities": {"maxItems": 2, "items": {"enum": ["settings", "systemui"]}}}, "not": {"anyOf": [{"required": ["runtime"]}, {"required": ["nativeSettings"]}]}}},
     {"if": {"properties": {"apiVersion": {"const": 2}}, "required": ["apiVersion"]}, "then": {"required": ["runtime", "capabilities"], "properties": {"capabilities": {"contains": {"const": "runtime"}}}}}
   ],
-  "$comment": "宿主额外检查NUL、UTF-8元数据、包路径、版本与身份一致性。API 1 文本及容量限制仅适用于 API 1；API 2 的 runtime.entry 是 JS 执行入口，其余资源可为任意合法二进制内容。"
+  "$comment": "minimumHost/features/usage/scopes、控件分组及 nativeSettings 为 code210 起的可选展示与能力契约；目录仍使用原有分发元数据。scopes 不授予权限或创建跨进程运行环境。宿主另查 NUL、路径与 manifest/真实描述一致性。"
 }

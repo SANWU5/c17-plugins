@@ -2,7 +2,7 @@
 
 宿主起始版本：Status C17 2.0 / code192。插件自身的 `version` 和 `versionCode` 独立递增。API 1 是隔离的声明式规则；API 2 是完整运行扩展，需要支持 API 2 的宿主。
 
-**本文的 `action/status` 表单及 `C17.onAction/publishStatus` 最低需要 2.1.0_beta.008 / code206。code205 虽支持 API 2，也不能导入这两类控件。** API 编号保持 2，不能用它代替宿主版本检查；当前 manifest/目录不支持最低宿主字段，请在发行说明与 README 写清所需宿主版本。
+**本文的 `action/status` 表单及 `C17.onAction/publishStatus` 最低需要 2.1.0_beta.008 / code206。code205 虽支持 API 2，也不能导入这两类控件。** API 编号不能代替宿主能力检查。code210 起的可选详情、分组、能力探测和原生设置契约见下文；不使用新字段的旧 API 1/2 插件继续兼容。本文不表示 code210 已发布、安装或通过 ROM 验收。
 
 公开仓库目录接入用于 2.0.1 / code193。仓库 `templates/` 仅供开发参考，不列入公开可安装目录；当前目录为空。格式、命名空间、版权来源、适配和分发规则见根 [SPEC.md](../SPEC.md)，使用边界见 [免责声明](../DISCLAIMER.zh-CN.md)。
 
@@ -23,6 +23,10 @@ API 2 的 `entry` 仍是导入时用于身份、表单和预览的 `main.js`。�
   "apiVersion": 2,
   "author": "yourname",
   "capabilities": ["runtime"],
+  "minimumHost": 210,
+  "features": ["runtime.java", "scope.systemui"],
+  "usage": "在 SystemUI 调整声明的功能；先启用插件，再修改设置。停用时恢复插件拥有的界面。",
+  "scopes": ["com.android.systemui"],
   "entry": "main.js",
   "runtime": {"entry": "runtime.js"}
 }
@@ -46,13 +50,42 @@ API 2 的 `entry` 仍是导入时用于身份、表单和预览的 `main.js`。�
 
 标准构建器采用开发模板的写法：`var plugin = {严格 JSON 元数据};`，之后以 `plugin.ui = [严格 JSON 控件声明];` 声明完整表单，再赋值 `plugin.settings` 与 `plugin.hooks`，最后 `C17.define(plugin)`。构建器读取元数据头与 manifest 比对，并静态检查唯一的表单声明、类型、默认值和至少一个可编辑项；它不执行脚本，因此不能证明后续脚本没有改写表单或每个参数都关联功能，宿主仍会对实际输出强制检查。应用也接受直接 `C17.define({...})` 的独立脚本；一般动态脚本可直接交宿主验证导入，标准构建器不负责解析所有 JavaScript 语法。
 
-manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致。宿主允许 manifest 省略 description、author、capabilities；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
+manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致；新 `minimumHost/features/usage/scopes/nativeSettings` 也必须在 manifest 与实际描述之间一致。宿主允许旧可选字段按既有规则省略；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
 
 从在线仓库下载还有独立的目录一致性检查：目录与脚本的 `id/name/version/versionCode/apiVersion` 逐项相同，目录非空白作者与脚本作者相同，能力按集合完全相同；`description` 仅用于展示，不参与这一层的包一致性比较。**目录缺少 capabilities 按空数组处理**；若脚本声明 settings 或 systemui，就必须在目录如实列出，否则下载内容即使通过 size/SHA-256 也会取消导入。这与 ZIP manifest 的可选字段省略规则是不同层次的检查。
 
+## 详情与宿主能力声明
+
+code210 起，插件详情按三段展示：①使用说明与概况，包含声明作用域及实际可核实的框架勾选状态；②功能与设置，保留全部业务开关和入口；③插件管理，包含删除、更新、恢复默认及其他管理设置。声明、框架勾选、插件启用、运行就绪是不同信息。勾选读取失败或框架不提供结果时显示“未知”，不能从已启用推断“已勾选”。
+
+descriptor 与 ZIP manifest 可同时声明以下字段，旧插件无需补填：
+
+| 字段 | 类型与含义 |
+|---|---|
+| `minimumHost` | 整数 1–2147483647，所需 App `versionCode`，不是 API 编号或插件版本 |
+| `features` | 至多 64 个唯一字符串，每项最多 80 字符，格式 `[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*`；列出需要的宿主能力 |
+| `usage` | 最多 4096 字符，说明使用步骤、影响区域、适配条件及恢复方式 |
+| `scopes` | 至多 64 个唯一 Android 包名，每项最多 240 字符，或 `android`；只声明应用作用域，不授权、自动勾选或创建进程 |
+| `nativeSettings` | API 2 的原生设置入口对象，见下节 |
+
+运行入口可读取对象属性 `C17.host`，包含 `apiVersion/versionCode/features/runtimePackage`；`features` 是当前宿主实际支持的标识数组，`runtimePackage` 是实际运行所在进程的包名。`C17.hasFeature(name)` 查询某项能力是否存在。当前声明的能力为 `runtime.java`、`runtime.dex`、`runtime.hooks`、`runtime.main`、`runtime.actions`、`runtime.status`、`ui.groups`、`ui.native-settings`、`scope.systemui`。能力名不能替代目标 ROM 方法核验，也不会授予额外权限。
+
+```javascript
+// 新字段和探测接口需要 code210；兼容旧宿主的源码应先检查接口是否存在。
+if (typeof C17.hasFeature === "function" && C17.hasFeature("runtime.main")) {
+  C17.runOnMain(function () { C17.log("运行于 " + C17.host.runtimePackage); });
+}
+```
+
+只有依赖新增宿主能力时才提高 `minimumHost`；普通功能调整在现有 Java/DEX/Hook 接口内完成，递增插件自身 `versionCode` 即可。新字段不被旧宿主识别；需要继续支持旧宿主时，应保留不使用新字段的兼容包，不能仅删除 `minimumHost` 却保留未知字段。三份现有 API 1 模板因此保持旧源码字段和原最低宿主。
+
+当前运行引擎只在 `com.android.systemui` 执行 API 2 runtime 和系统规则。旧包没有 `scopes` 时继续沿用原有 SystemUI 环境；声明其他应用执行作用域的包可导入保留审阅，但宿主须说明当前引擎不支持并阻止启用。即使框架已经勾选该应用，也不表示 C17 已提供该应用的插件执行引擎。状态栏、控制中心、锁屏等 ROM 组件区域写在 `usage`，不写成应用包名。
+
+公开目录仍只允许原有基本元数据和 `file/sha256/size`，不接收上述新字段、表单、原生入口或脚本。标准构建器把新详情元数据保留在 ZIP 与描述中，生成目录时只复制基本元数据；下载后仍须核对 manifest 与真实描述，不以目录省略新字段为由绕过检查。
+
 ## 表单与状态
 
-API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。两个 API 都必须至少有一个真实关联功能的 `switch/slider/input/select`，完整呈现插件全部可调参数；只有说明文字或按钮会被拒绝导入。每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。旧版已安装无配置插件保留原记录，不自动删除或改启用状态，作者应发升级包补全。
+API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。普通表单必须至少有一个真实关联功能的 `switch/slider/input/select`，完整呈现插件全部可调参数；只有说明文字或按钮会被拒绝导入。API 2 如提供有效 `nativeSettings`，可用它承载完整设置，`ui` 可为空数组；使用宿主状态的参数仍须有对应持久控件声明。每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。旧版已安装无配置插件保留原记录，不自动删除或改启用状态，作者应发升级包补全。
 
 | type | 数据与默认值 |
 |---|---|
@@ -65,6 +98,16 @@ API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。两个 AP
 | `action` | API 2、code206 起提供的一次性运行操作；必填唯一 key，不接受 default/value，也不进入 C17.state |
 | `status` | API 2、code206 起提供的只读运行文字；必填唯一 key，由 C17.publishStatus 提供，不进入 C17.state |
 
+code210 起，每项还可有 `section:"features"` 或 `section:"management"`，默认 `features`；`group` 为最多 120 字符的分组名称。这两项也适用于 `text/action/status`，不进入 `C17.state`，不改变动作与只读状态语义。不要用分组、折叠或原生界面迁移删除既有参数。
+
+```javascript
+plugin.ui = [
+  {"type":"switch","key":"enabled","title":"启用功能","default":false,"section":"features","group":"外观"},
+  {"type":"action","key":"capture","title":"保存数据","section":"management","group":"数据管理"},
+  {"type":"status","key":"saved_at","title":"保存时间","section":"management","group":"数据管理"}
+];
+```
+
 读取 `C17.state.<key>`。首次评估状态可能为空，脚本应给出回退值；宿主取得声明后补齐默认值和已保存的状态，再评估一次。每次更改表单重新编译规则，脚本修改临时 `C17.state` 对象不会写回保存值。不要让元数据或能力声明依赖状态。
 
 完整配置应逐项声明在 `ui` 中；宿主不会把一个模式选择自动展开成多个未声明的设置。API 1 的当前控件键和类型必须保持稳定，不支持通过增删有状态控件保存隐藏配置。可根据已保存的状态调整说明文字与输出规则，但不能让现有状态因控件类型、选项或范围变化而失效。`unit` 只用于滑块显示，不参与数值换算；需要兼容 code192–195 时请省略该字段。
@@ -72,6 +115,35 @@ API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。两个 AP
 名称和说明宜简短，详细操作与诊断可链接到发行文档。整理文案时保留现有键、类型、选项值、默认值和有效范围，并用已有非默认值验证升级前后仍然一致；不能通过移除控件实现“精简”。完整参数要求与简洁界面应同时满足。
 
 2.0.4 / code196 起，插件详情可将该插件的所有独立配置一次恢复为声明的默认值。宿主从空状态解析默认值，最多四轮稳定生成且重复结果一致后才提交；身份、权限或默认规则异常、与其他插件冲突时保留原配置及启用状态。恢复默认不写入用户的 C17 原设置，也不撤销其他插件的配置。
+
+## 原生设置入口
+
+code210 起，API 2 ZIP 可在 manifest 与描述中同时声明 `nativeSettings:{"dex":"settings/classes.dex","className":"example.plugin.SettingsView"}`。`dex` 必须是包内已导入的安全相对 `.dex` 或 `.jar` 路径，最多 4096 字符，路径只含 ASCII 字母、数字、下划线、点、斜杠和短横线；`className` 是最多 240 字符的完整 Java 类名，支持 `$` 内部类。单 JS 不能声明不存在的 DEX 资源。入口类提供固定方法：
+
+```java
+public static android.view.View createView(
+    android.content.Context context,
+    String stateJson,
+    java.lang.reflect.InvocationHandler bridge);
+```
+
+返回 View 由宿主显示。`stateJson` 是进入界面时的表单状态 JSON；需要最新状态时调用 bridge，避免把旧快照当作最新值。桥接调用格式为 `bridge.invoke(null, null, new Object[]{操作, ...})`：
+
+| 操作与参数 | 行为 |
+|---|---|
+| `{"state"}` | 返回当前缓存状态的 JSON 字符串 |
+| `{"host"}` | 返回与 `C17.host` 同结构的宿主探测 JSON 字符串；包名反映当前 App 进程 |
+| `{"set", key, value, callback}` | 异步保存已声明的持久状态键；`callback` 是 `java.util.function.BiConsumer<String,String>`，在主线程接收 `(最新stateJson,null)` 或 `(null,error)` |
+| `{"onCleanup", runnable}` | 注册界面销毁时执行的 `java.lang.Runnable` 清理任务 |
+| `{"close"}` | 关闭此设置界面 |
+
+`set` 不能凭空创建私有宿主字段；对应 key 必须由 `ui` 的 `switch/slider/input/select/button` 声明，并沿用其类型、范围和默认值。宿主异步完成隔离编译和保存，原生页面不应阻塞 App 主线程等待结果。复杂界面可组合这些公开字段；已声明参数仍应完整可调整。动作使用已有 `action` 通道，不能以写计数器模拟执行。
+
+原生设置 Activity 不对外导出。它运行已导入、受信任的 API 2 代码，所在进程是 C17 App；插件停用时也可编辑配置，更新、删除、退出会使旧回调失效。插件应通过清理回调释放监听器与任务，不能保留已销毁页面。这个入口是可信代码界面，不能被描述成隔离沙箱、跨应用注入或自动获得 Root。
+
+安全模式禁止打开原生设置代码入口，并关闭已打开的原生页面、执行清理；普通声明式表单仍可编辑，不能通过原生页面绕过暂停。
+
+宿主没有 `C17.ui.runMain` 或 `C17.openNativeSettings` 运行接口；SystemUI 主线程任务使用已有 `C17.runOnMain`，原生设置页通过详情中的原生入口打开。不要依赖未公布的类或反射私有宿主字段来模拟稳定 SDK。
 
 ## settings 能力
 
@@ -152,6 +224,8 @@ API 2 在 SystemUI 进程内执行完整 JavaScript，直接使用 Rhino LiveCon
 | `onAction(key, callback)` | code206 起注册一个已声明 action 的主线程回调，接收 `{requestId, instanceId, action}`；返回取消函数 |
 | `publishStatus(values)` | code206 起合并已声明 status 的只读文字，例如 `{saved_at:"2026-10-20 15:30"}`；每项最多4096字符，单次更新及合并后状态各最多64KiB UTF-8 |
 | `runOnMain(callback)` | 排入 Android 主线程，返回取消函数；停用时取消未执行任务 |
+| `host` | code210 起的只读宿主探测对象属性：`apiVersion/versionCode/features/runtimePackage` |
+| `hasFeature(name)` | code210 起查询当前宿主实际能力；不改变权限、作用域或 ROM 适配情况 |
 | `onCleanup(callback)` | 注册按后进先出顺序调用的恢复函数；应使用事先捕获的 Java 对象完成恢复 |
 | `dataDir()` | 返回本插件跨版本保留的可写数据目录（`java.io.File`） |
 | `save(name, value)` / `load(name[, fallback])` | 保存 JSON 值，或读取已保存值；不存在时返回 fallback |
@@ -182,7 +256,7 @@ C17.onAction("capture", function (request) {
 });
 ```
 
-`action/status` 最低需要 code206，code205 不支持。状态或动作之间及与可编辑设置之间的 key 必须唯一；只允许 `type/key/title/description`，不接受持久值、数值范围或选项字段。它们不能替代至少一个真实功能设置。操作只在启用、已就绪且非安全模式的当前实例上执行；业务开关关闭是否允许某个操作，由插件校验自己的业务条件。旧 `button` 的持久赋值语义保持不变。
+`action/status` 最低需要 code206，code205 不支持。状态或动作之间及与可编辑设置之间的 key 必须唯一；code206 只允许 `type/key/title/description`，code210 起还可用展示字段 `section/group`，不接受持久值、数值范围或选项字段。它们不能替代真实功能设置入口。操作只在启用、已就绪且非安全模式的当前实例上执行；业务开关关闭是否允许某个操作，由插件校验自己的业务条件。旧 `button` 的持久赋值语义保持不变。
 
 JS Hook 回调接收 Chain：`getExecutable()`、`getThisObject()`、`getArgs()`、`getArg(index)`、`proceed()`、`proceed(Object[])`、`proceedWith(receiver)`、`proceedWith(receiver,Object[])`。回调返回新结果；`proceed` 使用原方法结果并保留原异常，重复调用不会重复执行原方法。要传入 Java 数组，可通过 Java 反射创建匹配参数类型的数组。类暂未出现时，命名 Hook 会在后续 ClassLoader 到达后重试。
 

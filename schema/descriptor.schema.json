@@ -62,23 +62,6 @@
     },
     "ui": {
       "type": "array",
-      "minItems": 1,
-      "contains": {
-        "type": "object",
-        "required": [
-          "type"
-        ],
-        "properties": {
-          "type": {
-            "enum": [
-              "switch",
-              "slider",
-              "input",
-              "select"
-            ]
-          }
-        }
-      },
       "items": {
         "$ref": "#/$defs/control"
       }
@@ -139,6 +122,56 @@
           }
         }
       ]
+    },
+    "minimumHost": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "features": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 80,
+        "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+      }
+    },
+    "usage": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "scopes": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:android|[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)+)$",
+        "maxLength": 240
+      }
+    },
+    "nativeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dex",
+        "className"
+      ],
+      "properties": {
+        "dex": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 4096,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[a-zA-Z0-9_./-]+\\.(?:dex|jar)$"
+        },
+        "className": {
+          "type": "string",
+          "maxLength": 240,
+          "pattern": "^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\\.[a-zA-Z_$][a-zA-Z0-9_$]*)+$"
+        }
+      }
     }
   },
   "allOf": [
@@ -187,8 +220,17 @@
           }
         },
         "not": {
-          "required": [
-            "runtime"
+          "anyOf": [
+            {
+              "required": [
+                "runtime"
+              ]
+            },
+            {
+              "required": [
+                "nativeSettings"
+              ]
+            }
           ]
         }
       }
@@ -213,6 +255,38 @@
           "capabilities": {
             "contains": {
               "const": "runtime"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "required": [
+            "nativeSettings"
+          ]
+        }
+      },
+      "then": {
+        "properties": {
+          "ui": {
+            "minItems": 1,
+            "contains": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "enum": [
+                    "switch",
+                    "slider",
+                    "input",
+                    "select"
+                  ]
+                }
+              }
             }
           }
         }
@@ -315,6 +389,17 @@
               }
             }
           }
+        },
+        "section": {
+          "enum": [
+            "features",
+            "management"
+          ],
+          "default": "features"
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 120
         }
       },
       "allOf": [
@@ -752,5 +837,5 @@
       ]
     }
   },
-  "$comment": "action/status 及 C17.onAction/publishStatus 最低需要宿主 code206；code205 虽支持 API 2，也不能导入这两类控件。宿主额外检查能力声明、动态状态/默认值、控件及规则id唯一性、slider跨字段范围、当前SettingsCatalog可见键/类型/边界、真实ROM方法和返回类型、有限数值、NUL。API 1 输出限制为128KiB/4096节点/12层；API 2 不套用上述数量配额，但导入元数据求值仍隔离且有执行预算。settings/hooks 是旧声明式通道，API 2 的任意扩展通过 runtime 实现。JSON Schema不能替代实际脚本求值和运行适配。"
+  "$comment": "minimumHost/features/usage/scopes、控件分组及 nativeSettings 为 code210 起的可选展示与能力契约；目录仍使用原有分发元数据。scopes 不授予权限或创建跨进程运行环境。宿主另查 NUL、路径与 manifest/真实描述一致性。"
 }

@@ -94,6 +94,100 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(pack.Invalid):
             pack.validate_files(self.mutate_manifest(self.files(), network=True))
 
+    def test_optional_detail_metadata_is_strict_and_legacy_metadata_still_works(self):
+        for api in (1, 2):
+            original = pack.decode_json(self.files()["plugin.json"]) if api == 1 else self.api2_files()[1]
+            pack.validate_metadata(original, manifest=True)
+            metadata = dict(original, minimumHost=210, usage="先启用，再调整设置；停用恢复原样。",
+                            features=["ui.groups", "scope.systemui"], scopes=["com.android.systemui", "android"])
+            pack.validate_metadata(metadata, manifest=True)
+            for field, value in (("minimumHost", True), ("minimumHost", 0), ("minimumHost", 2147483648),
+                                 ("usage", "x" * 4097), ("usage", 1), ("features", ["runtime.dex"] * 2),
+                                 ("features", ["bad feature"]), ("features", ["x" * 81]),
+                                 ("features", ["feature" + str(index) for index in range(65)]),
+                                 ("scopes", ["com.android.systemui"] * 2), ("scopes", ["systemui"]),
+                                 ("scopes", ["com..android"]), ("scopes", ["com.android:remote"]),
+                                 ("scopes", ["com." + "x" * 237]),
+                                 ("scopes", [None]), ("features", [[]])):
+                with self.subTest(api=api, field=field, value=value), self.assertRaises(pack.Invalid):
+                    pack.validate_metadata(dict(metadata, **{field: value}), manifest=True)
+
+    def test_grouped_controls_keep_state_and_action_contracts(self):
+        controls = [{"type": "switch", "key": "enabled", "title": "启用", "section": "features", "group": "外观"},
+                    {"type": "action", "key": "capture", "title": "保存", "section": "management", "group": "数据"},
+                    {"type": "status", "key": "saved_at", "title": "保存时间", "group": "数据"}]
+        pack.validate_form(controls, 2)
+        pack.validate_form(controls[:1], 1)
+        for field, value in (("section", "overview"), ("section", 1), ("group", "x" * 121), ("group", [])):
+            with self.subTest(field=field), self.assertRaises(pack.Invalid):
+                pack.validate_form([dict(controls[0], **{field: value})], 2)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form(controls[:1] + [dict(controls[1], value=True)], 2)
+
+    def test_native_settings_requires_api2_valid_resource_and_complete_abi_metadata(self):
+        files, original = self.api2_files()
+        native = {"dex": "settings/classes.dex", "className": "example.plugin.SettingsView"}
+        metadata = dict(original, nativeSettings=native, minimumHost=210)
+        files["plugin.json"] = pack.json_bytes(metadata)
+        files[native["dex"]] = b"dex\n\0native-settings-fixture"
+        source_metadata = {key: value for key, value in metadata.items() if key != "entry"}
+        files["main.js"] = ("var plugin = " + json.dumps(source_metadata) + ";\nplugin.ui = [];\nC17.define(plugin);").encode()
+        self.assertEqual(metadata, pack.validate_files(files))
+        self.assertEqual(metadata, pack.inspect_archive(pack.archive_bytes(files)))
+        missing = dict(files)
+        del missing[native["dex"]]
+        with self.assertRaisesRegex(pack.Invalid, "DEX/JAR"):
+            pack.validate_files(missing)
+        for value in ({"dex": "../settings.dex", "className": native["className"]},
+                      {"dex": "settings.js", "className": native["className"]},
+                      {"dex": "/settings.jar", "className": native["className"]},
+                      {"dex": "设置.dex", "className": native["className"]},
+                      {"dex": "my settings.jar", "className": native["className"]},
+                      {"dex": "settings.jar", "className": "SettingsView"},
+                      {"dex": "settings.jar", "className": "example.Bad-Class"},
+                      {"dex": "settings.jar", "className": native["className"], "method": "other"}):
+            with self.subTest(native=value), self.assertRaises(pack.Invalid):
+                pack.validate_metadata(dict(metadata, nativeSettings=value), manifest=True)
+        pack.validate_metadata(dict(metadata, nativeSettings={"dex": "settings.jar", "className": "example.Settings$Entry"}), manifest=True)
+        legacy = dict(pack.decode_json(self.files()["plugin.json"]), nativeSettings=native)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_metadata(legacy, manifest=True)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form([], 1, native_settings=True)
+
+    def test_new_detail_metadata_must_match_source_and_manifest(self):
+        for field, value in (("minimumHost", 210), ("features", ["runtime.java"]), ("usage", "使用说明"),
+                             ("scopes", ["com.android.systemui"])):
+            files, manifest = self.api2_files()
+            files["plugin.json"] = pack.json_bytes(dict(manifest, **{field: value}))
+            with self.subTest(field=field), self.assertRaisesRegex(pack.Invalid, "不一致"):
+                pack.validate_files(files)
+
+    def test_detail_metadata_stays_in_package_and_does_not_change_catalog_shape(self):
+        files, original = self.api2_files()
+        manifest = dict(original, minimumHost=210, usage="使用说明", features=["runtime.dex"], scopes=["com.android.systemui"])
+        files["plugin.json"] = pack.json_bytes(manifest)
+        metadata = {key: value for key, value in manifest.items() if key != "entry"}
+        files["main.js"] = ("var plugin = " + json.dumps(metadata) + ";\nplugin.ui = "
+                            + json.dumps([{"type": "switch", "key": "enabled", "title": "Enable"}])
+                            + ";\nC17.define(plugin);").encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            source, out = Path(temporary) / "source", Path(temporary) / "out"
+            source.mkdir()
+            for name, content in files.items():
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            entry = pack.build(source, out)
+            self.assertTrue(set(entry).issubset(pack.META_FIELDS | {"file", "sha256", "size"}))
+            pack.write_index([entry], out)
+            catalog = pack.decode_json((out / "index.json").read_bytes())
+            pack.validate_catalog(catalog)
+            self.assertEqual(manifest, pack.inspect_archive((out / entry["file"]).read_bytes()))
+            for field in ("minimumHost", "features", "usage", "scopes", "nativeSettings"):
+                with self.subTest(field=field), self.assertRaises(pack.Invalid):
+                    pack.validate_catalog(dict(catalog, plugins=[dict(entry, **{field: manifest.get(field, {})})]))
+
     def test_boolean_is_not_a_version_integer(self):
         with self.assertRaises(pack.Invalid):
             pack.validate_files(self.mutate_manifest(self.files(), versionCode=True))
