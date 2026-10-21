@@ -155,6 +155,43 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(pack.Invalid):
             pack.validate_form([], 1, native_settings=True)
 
+    def test_complete_detail_reorganization_uses_the_same_host_contract(self):
+        files, original = self.api2_files()
+        metadata = {key: value for key, value in original.items() if key != "entry"}
+        metadata.update(minimumHost=210, features=["ui.groups", "runtime.actions", "runtime.status"],
+                        usage="按说明启用并调整；停用恢复原样。", scopes=["com.android.systemui"])
+        controls = [
+            {"type": "switch", "key": "enabled", "title": "启用功能", "default": False, "group": "基本设置"},
+            {"type": "slider", "key": "intensity", "title": "强度", "min": 0, "max": 100, "default": 50},
+            {"type": "select", "key": "mode", "title": "模式", "options": [{"value": "system", "label": "系统"},
+             {"value": "custom", "label": "自定义"}], "default": "system"},
+            {"type": "input", "key": "note", "title": "备注", "default": "", "section": "management"},
+            {"type": "action", "key": "capture", "title": "保存数据", "section": "management"},
+            {"type": "status", "key": "saved_at", "title": "保存时间", "section": "management"},
+        ]
+        original_controls = copy.deepcopy(controls)
+        for version in (1, 2):
+            metadata.update(version=f"1.0.{version}", versionCode=version)
+            if version == 2:
+                controls = list(reversed(controls))
+                for item in controls:
+                    item.update(section="management" if item["key"] == "intensity" else "features", group="新分组")
+            manifest = dict(metadata, entry="main.js")
+            files["plugin.json"] = pack.json_bytes(manifest)
+            files["main.js"] = ("var plugin = " + json.dumps(metadata, ensure_ascii=False) + ";\nplugin.ui = "
+                                + json.dumps(controls, ensure_ascii=False)
+                                + ";\nplugin.settings = {}; plugin.hooks = []; C17.define(plugin);").encode("utf-8")
+            self.assertEqual(manifest, pack.validate_files(files))
+            self.assertEqual(manifest, pack.inspect_archive(pack.archive_bytes(files)))
+            self.assertEqual(210, manifest["minimumHost"])
+            persisted = {item["key"]: {key: value for key, value in item.items() if key not in ("section", "group")}
+                         for item in controls}
+            self.assertEqual({item["key"]: {key: value for key, value in item.items() if key not in ("section", "group")}
+                              for item in original_controls}, persisted)
+        for field, value in (("selectedScopes", ["com.android.systemui"]), ("scopeSelected", True)):
+            with self.subTest(field=field), self.assertRaises(pack.Invalid):
+                pack.validate_metadata(dict(manifest, **{field: value}), manifest=True)
+
     def test_new_detail_metadata_must_match_source_and_manifest(self):
         for field, value in (("minimumHost", 210), ("features", ["runtime.java"]), ("usage", "使用说明"),
                              ("scopes", ["com.android.systemui"])):
