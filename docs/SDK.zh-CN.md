@@ -1,5 +1,8 @@
 # C17 插件 SDK · API 1/2
 
+新开发基线为 **code261 统一详情页**，见 [页面规范](DETAIL-UI.zh-CN.md) 与 [API 2 模板](../templates/standard-runtime/README.md)。`ui.management-groups` 使管理页采用与设置页相同的分类导航；作用域申请/重启、启用总开关及公共管理操作由宿主提供，不是需要插件注册的动作。
+
+
 宿主起始版本：Status C17 2.0 / code192。插件自身的 `version` 和 `versionCode` 独立递增。API 1 是隔离的声明式规则；API 2 是完整运行扩展，需要支持 API 2 的宿主。
 
 **本文的 `action/status` 表单及 `C17.onAction/publishStatus` 最低需要 2.1.0_beta.008 / code206。code205 虽支持 API 2，也不能导入这两类控件。** API 编号不能代替宿主能力检查。code210 起的可选详情、分组、能力探测和原生设置契约见下文；不使用新字段的旧 API 1/2 插件继续兼容。本文不表示 code210 已发布、安装或通过 ROM 验收。
@@ -68,7 +71,7 @@ descriptor 与 ZIP manifest 可同时声明以下字段，旧插件无需补填�
 | `scopes` | 至多 64 个唯一 Android 包名，每项最多 240 字符，或 `android`；只声明应用作用域，不授权、自动勾选或创建进程 |
 | `nativeSettings` | API 2 的原生设置入口对象，见下节 |
 
-运行入口可读取对象属性 `C17.host`，包含 `apiVersion/versionCode/features/runtimePackage`；`features` 是当前宿主实际支持的标识数组，`runtimePackage` 是实际运行所在进程的包名。`C17.hasFeature(name)` 查询某项能力是否存在。当前声明的能力为 `runtime.java`、`runtime.dex`、`runtime.hooks`、`runtime.main`、`runtime.actions`、`runtime.status`、`ui.groups`、`ui.native-settings`、`scope.systemui`。能力名不能替代目标 ROM 方法核验，也不会授予额外权限。
+运行入口可读取对象属性 `C17.host`，包含 `apiVersion/versionCode/features/runtimePackage`；`features` 是当前宿主实际支持的标识数组，`runtimePackage` 是实际运行所在进程的包名。`C17.hasFeature(name)` 查询某项能力是否存在。code210 声明的能力为 `runtime.java`、`runtime.dex`、`runtime.hooks`、`runtime.main`、`runtime.actions`、`runtime.status`、`ui.groups`、`ui.native-settings`、`scope.systemui`；code246 增加 `scope.apps` 和 `ui.collapsible-groups`；code249 增加 `ui.group-paths`、`ui.color`、`ui.numeric-input` 与 `ui.presets`；code252 增加 `ui.unbounded-input`。能力名不能替代目标 ROM 方法核验，也不会授予额外权限。
 
 ```javascript
 // 新字段和探测接口需要 code210；兼容旧宿主的源码应先检查接口是否存在。
@@ -79,7 +82,36 @@ if (typeof C17.hasFeature === "function" && C17.hasFeature("runtime.main")) {
 
 只有依赖新增宿主能力时才提高 `minimumHost`；普通功能调整在现有 Java/DEX/Hook 接口内完成，递增插件自身 `versionCode` 即可。新字段不被旧宿主识别；需要继续支持旧宿主时，应保留不使用新字段的兼容包，不能仅删除 `minimumHost` 却保留未知字段。三份现有 API 1 模板因此保持旧源码字段和原最低宿主。
 
-当前运行引擎只在 `com.android.systemui` 执行 API 2 runtime 和系统规则。旧包没有 `scopes` 时继续沿用原有 SystemUI 环境；声明其他应用执行作用域的包可导入保留审阅，但宿主须说明当前引擎不支持并阻止启用。即使框架已经勾选该应用，也不表示 C17 已提供该应用的插件执行引擎。状态栏、控制中心、锁屏等 ROM 组件区域写在 `usage`，不写成应用包名。
+code246 起可按下节声明 API 2 多应用作用域；更早的宿主仍只执行 SystemUI。旧包没有 `scopes` 时继续沿用原有 SystemUI 环境。状态栏、控制中心、锁屏等 ROM 组件区域写在 `usage`，不写成应用包名。
+
+### 多应用运行（code246）
+
+新的导入形式仍是一个插件 ZIP，不需要为每个应用安装 APK。示例元数据：
+
+```json
+{
+  "apiVersion": 2,
+  "minimumHost": 246,
+  "capabilities": ["runtime"],
+  "features": ["runtime.java", "runtime.hooks", "scope.apps", "ui.collapsible-groups"],
+  "scopes": ["com.android.systemui", "com.example.launcher", "com.example.sidebar"],
+  "runtime": {"entry": "runtime.js"}
+}
+```
+
+上面只展示与作用域有关的字段，身份、完整设置等仍按完整插件契约提供。包名必须逐项精确声明；不支持通配符、`android` 系统服务或 C17 自身包。`scope.apps` 只增加执行能力，不会替用户勾选框架作用域、启动目标进程或给予 Root。含外部作用域的插件必须使用 API 2 runtime，`settings` 和 `hooks` 输出保持空；独立的 `ui`、`C17.state` 和配置保存照常使用。不同 ROM 实际包名与目标类方法仍需核验。
+
+每个已加载模块的目标进程取得自己的 `C17.context`、`C17.host.runtimePackage`、主线程、原生类加载器和插件生命周期。按实际包名选择适配器；全局静态字段、JS 变量与已装 Hook 都是进程内的，不能假定它们与 SystemUI 共享。表单状态由宿主统一分发。外部引擎以框架提供的稳定进程名分配独立的资源、`C17.dataDir/save/load` 和清理记录目录，同一包的主进程与 `:overlay` 等子进程也互相隔离；相同进程名重启后仍能读取自己的独立数据。这些接口不是跨应用或跨进程共享存储。SystemUI 独占旧插件的目录不变。
+
+包含外部作用域的包不能声明非空 `runtime.preferences`。Android 原生 SharedPreferences 名称属于整个应用，不能安全地当作某个插件进程的独占数据清理。需要保存插件独立内容时使用 `C17.save/load/dataDir`；`C17.context` 仍是真实原生 Context，不通过改写它的偏好访问语义伪造隔离。
+
+外部引擎通过专用 provider 读取计划与资产：宿主核验 Binder UID 包归属，只发往该包作用域内的启用 runtime 与最小安装清单；不交付宿主设置覆盖、其他插件、主设置、Root 管理命令或宿主私有路径。资产按当前启用版本、路径与作用域校验。归属记录、删除文件和准备素材共用串行后台队列，目标应用主线程只处理快照与生命周期，不执行这些文件扫描或等待跨进程锁。配置更新采用事件通知，重复通知合并，过期的异步读取结果丢弃；停用和安全模式会调用当前进程的清理。配置读取或更新观察不可用时暂停，暂时失败仅有限启动重试，没有常驻轮询。
+
+`C17.publishStatus` 可在各进程报告已声明的 `status` 键。插件详情保留 SystemUI 状态，并按包名与进程追加外部最近报告及时间；安装代次/版本改变后不显示旧报告。它是最近一次观察，不能证明一个休眠、被杀或未重新启动的进程此刻仍在运行。插件应在初始化和确有状态变化的事件后发布，避免每帧或定时刷新。`C17.onAction` 注册仍可在运行脚本中使用，但宿主的表单动作只投递到 SystemUI 实例，不会广播或唤醒其他包；仅含外部作用域的包若实际提供 `action` 或通过 `optionsAction` 获取选项的 `sort` 控件，会被阻止启用。仅声明 `runtime.actions` 而没有依赖该通道的表单控件仍兼容；含 SystemUI 的混合作用域照常使用动作。
+
+普通 Hook、主线程任务和代理仍由宿主随停用撤销；插件的 View 改动、组件回调、原生资源以及自己的线程必须通过 `C17.onCleanup` 恢复。系统直接结束进程时不能承诺执行清理代码。新增跨应用支持不会改变 API 2 的可信代码模型，代码取得所在应用本身可用的权限。
+
+`ui.collapsible-groups` 同样从 code246 起提供。声明后，功能和管理分组默认收起，点开查看；控件、持久状态、动作和状态报告不因折叠而删减。未声明此能力的旧插件维持原有展示。
 
 公开目录仍只允许原有基本元数据和 `file/sha256/size`，不接收上述新字段、表单、原生入口或脚本。标准构建器把新详情元数据保留在 ZIP 与描述中，生成目录时只复制基本元数据；下载后仍须核对 manifest 与真实描述，不以目录省略新字段为由绕过检查。
 
@@ -87,20 +119,32 @@ if (typeof C17.hasFeature === "function" && C17.hasFeature("runtime.main")) {
 
 三段页面的字段映射与第三方开发示例见[详情三段布局](DETAIL-UI.zh-CN.md)。前置条件使用元数据，功能和管理使用 `ui.section/group`；复杂设置使用下文的通用原生入口，无需为单个插件修改宿主。
 
-API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。普通表单必须至少有一个真实关联功能的 `switch/slider/input/select`，完整呈现插件全部可调参数；只有说明文字或按钮会被拒绝导入。API 2 如提供有效 `nativeSettings`，可用它承载完整设置，`ui` 可为空数组；使用宿主状态的参数仍须有对应持久控件声明。每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。旧版已安装无配置插件保留原记录，不自动删除或改启用状态，作者应发升级包补全。
+API 1 的 `ui` 包含 1–64 项，API 2 不设表单总项数配额。普通表单必须至少有一个真实关联功能的 `switch/slider/input/color/app/select/sort`，完整呈现插件全部可调参数；只有说明文字、预设或按钮会被拒绝导入。API 2 如提供有效 `nativeSettings`，可用它承载完整设置，`ui` 可为空数组；使用宿主状态的参数仍须有对应持久控件声明。每项 `title` 必填，最多 120 字符，`description` 可选且最多 512 字符。可编辑控件需要唯一 `key`，格式 `[a-zA-Z][A-Za-z0-9_.-]{0,63}`，禁止保留对象键。旧版已安装无配置插件保留原记录，不自动删除或改启用状态，作者应发升级包补全。
 
 | type | 数据与默认值 |
 |---|---|
 | `text` | 说明文字，无状态 key |
 | `switch` | 布尔值；缺省 `default:false` |
-| `slider` | 数字；必填 `min/max`，范围在 ±100000 内且 min < max；step > 0 且不大于范围，缺省 1；default 缺省 min；2.0.4 / code196 起可选 `unit` 显示单位（最多 16 字符） |
+| `slider` | 数字；必填 `min/max`，范围在 ±100000 内且 min < max；step > 0 且不大于范围，缺省 1；default 缺省 min；2.0.4 / code196 起可选 `unit` 显示单位（最多 16 字符）；可选 `unboundedInput:true` 让手动输入与预设不受 min/max 限制（需宿主 `ui.unbounded-input`） |
 | `input` | 文字；缺省空串，最多 4096 字符 |
+| `color` | code249 起，字符串 `#RRGGBB` 或 `#AARRGGBB`；缺省 `#FFFFFF`；使用宿主颜色面板，完整保留显式 alpha |
+| `app` | 字符串，空串或完整应用包名；缺省空串，宿主提供应用选择，声明 ui.app |
+| `sort` | API 2 动态排序；default 是 JSON 字符串（缺省 `"[]"`），最长65536字符；必填唯一 optionsAction，由 C17.onAction 返回实时目录，声明 ui.sort；支持移除时另声明 ui.sort-removal |
 | `select` | `options:[{value,label}]`，1–64 个唯一字符串值；default 缺省第一项 value |
 | `button` | 点击后把 `value` 写入该 key 并重新编译；value 缺省 true，可用字符串/数字/布尔值；不是任意回调 |
+| `preset` | code249 起；`values` 是 1–512 项对象（code255 起，code249–254 最多64项），键须引用同表单的持久控件、值须符合其类型和范围；只声明展示字段和唯一 key，不接受 default/value，不进入 `C17.state` 或运行时动作通道 |
 | `action` | API 2、code206 起提供的一次性运行操作；必填唯一 key，不接受 default/value，也不进入 C17.state |
 | `status` | API 2、code206 起提供的只读运行文字；必填唯一 key，由 C17.publishStatus 提供，不进入 C17.state |
 
+超过64项的整套预设须声明 `minimumHost:255`。预设仅由用户点击后一次性应用，不会在导入或启用插件时自动套用；它不能引用动作、只读状态或其他预设。API 1 的表单总项数和 JSON 预算仍按原有限制校验。
+
 code210 起，每项还可有 `section:"features"` 或 `section:"management"`，默认 `features`；`group` 为最多 120 字符的分组名称。这两项也适用于 `text/action/status`，不进入 `C17.state`，不改变动作与只读状态语义。不要用分组、折叠或原生界面迁移删除既有参数。
+
+code249 起，可用 `groupPath:["作用区域","桌面","Dock"]` 声明 1–3 层菜单；每个名称为非空字符串，最多 120 字符，不含 NUL。显式路径优先于 `group`；旧 `group` 仍是单层原名，不按斜杠或其他符号拆分。设置页支持该路径；管理页的实际层级导航从 code261 起提供，须声明 ui.management-groups，不因此更改持久状态。使用新路径、颜色或预设的插件应声明对应能力及 `minimumHost:249`。
+
+数字行可点击数值打开与主模块一致的输入框；支持有限小数与科学计数，手输保留精度并校验插件声明的硬范围，拖动才按 `min + n × step` 吸附。滑块声明 `unboundedInput:true` 时，min/max 只约束拖动范围和 `default`；手动输入与预设可填任意能以单精度表示的有限数值，超出范围时滑块停在端点、数值行照常显示已保存的值。插件运行端须自行处理极端值，不能假定状态落在 min/max 内。该字段需声明能力 `ui.unbounded-input` 及 `minimumHost:252`；旧宿主会按能力拒绝导入，不会把超范围值静默夹回。不要把 step 当作手工输入的小数位限制。把旧 `input` 颜色控件改为同 key 的 `color` 时，合法的已保存字符串（包括 alpha 和大小写）继续保留。
+
+预设以一次配置事务同时应用全部 `values`，重新编译和合并校验成功后才保存；失败不留下部分修改，也不改变插件启用状态。它可以设置多项颜色、开关和数值，套用后各项仍能独立编辑，不是持续锁定参数的模式。预设不能引用动作、状态或另一预设。
 
 ```javascript
 plugin.ui = [
@@ -111,6 +155,8 @@ plugin.ui = [
 ```
 
 读取 `C17.state.<key>`。首次评估状态可能为空，脚本应给出回退值；宿主取得声明后补齐默认值和已保存的状态，再评估一次。每次更改表单重新编译规则，脚本修改临时 `C17.state` 对象不会写回保存值。不要让元数据或能力声明依赖状态。
+
+code248 起，升级预览还会在归一化之前，以旧插件完整状态评估一次新脚本。因此合并或重命名控件时，新控件的 `default` 可先读取同名新值，其次读取旧键，最后回退出厂值；不必保留两套可编辑控件。身份和能力仍与空状态声明核对；安装只使用已预览的默认值，并继续拒绝预览后状态改变、身份变化或不可重复的声明。脚本须在补齐新状态后产生相同默认值，恢复默认仍从空状态解析。
 
 完整配置应逐项声明在 `ui` 中；宿主不会把一个模式选择自动展开成多个未声明的设置。API 1 的当前控件键和类型必须保持稳定，不支持通过增删有状态控件保存隐藏配置。可根据已保存的状态调整说明文字与输出规则，但不能让现有状态因控件类型、选项或范围变化而失效。`unit` 只用于滑块显示，不参与数值换算；需要兼容 code192–195 时请省略该字段。
 
@@ -139,7 +185,7 @@ public static android.view.View createView(
 | `{"onCleanup", runnable}` | 注册界面销毁时执行的 `java.lang.Runnable` 清理任务 |
 | `{"close"}` | 关闭此设置界面 |
 
-`set` 不能凭空创建私有宿主字段；对应 key 必须由 `ui` 的 `switch/slider/input/select/button` 声明，并沿用其类型、范围和默认值。宿主异步完成隔离编译和保存，原生页面不应阻塞 App 主线程等待结果。复杂界面可组合这些公开字段；已声明参数仍应完整可调整。动作使用已有 `action` 通道，不能以写计数器模拟执行。
+`set` 不能凭空创建私有宿主字段；对应 key 必须由 `ui` 的 `switch/slider/input/color/select/button` 声明，并沿用其类型、范围和默认值。宿主异步完成隔离编译和保存，原生页面不应阻塞 App 主线程等待结果。复杂界面可组合这些公开字段；已声明参数仍应完整可调整。动作使用已有 `action` 通道，不能以写计数器模拟执行。
 
 原生设置 Activity 不对外导出。它运行已导入、受信任的 API 2 代码，所在进程是 C17 App；插件停用时也可编辑配置，更新、删除、退出会使旧回调失效。插件应通过清理回调释放监听器与任务，不能保留已销毁页面。这个入口是可信代码界面，不能被描述成隔离沙箱、跨应用注入或自动获得 Root。
 
@@ -281,3 +327,17 @@ API 1 ZIP 最多 32 项、总解压 1MiB、单项 256KiB；大于 64KiB 的条�
 先导入并审查能力，确认安装后再手动启用。检查表单默认值、修改状态、与已有设置冲突、停用/移除/安全模式的恢复行为，再在目标 ROM 测试。导入成功、schema 通过或文件哈希一致均不能代替系统界面的实际效果验收。
 
 [运行与交互验收指南](VALIDATION.zh-CN.md) 给出配置兼容、异步测量、视图复用、媒体原生拖动、背景复用和文字显示的黑盒步骤。指南不提供业务实现，也不表示新增 API 或任何设备已经通过验收。
+
+## 表单补充与存储归属
+
+动态排序值是稳定标识数组的 JSON 字符串，或 `{"version":1,"order":[...],"hidden":[...]}` 的 JSON 字符串。标识必须唯一、非空、最长4096字符；hidden 必须包含于 order。optionsAction 与全部控件 key 共用唯一命名空间。目录动作返回 `{available:true,revision:"版本",items:[{value:"稳定标识",title:"名称"}]}`；支持移除时增加 `allowRemoval:true`。不可读取时返回 available:false 和具体 message，不能用空列表覆盖用户排序。
+
+`action.confirmation` 是1–1024字符的非空确认文案，仅作用于一次性动作，不接受于 switch/status。应写实际影响，避免每个普通刷新动作都弹确认。
+
+`runtime.preferences` 是可选的自有原生 SharedPreferences 文件名列表，最多32个、不可重复，格式 `[a-zA-Z][a-zA-Z0-9_.-]{2,119}`。声明文件表示插件承担其归属与卸载清理，不能填写其他功能或宿主拥有的文件。跨应用插件禁止非空此字段；独立数据优先使用 C17.save/load/dataDir。不要在停用清理时删除用户持久设置。
+
+`enableOnEdit` 可用于 switch/slider/color/select，引用同一表单内1–4个唯一且不同于自身的 switch。编辑后自动开启这些开关；不能引用未声明键或动作。能力为 ui.edit-enables。未声明时不自动联动。
+
+## 事件与性能约定
+
+运行入口在一次生命周期中只加载一次 DEX、解析一次固定类契约；配置变化通过 C17.onStateChanged 更新现有对象，停用通过 C17.onCleanup 恢复自有 View、回调和资源。不要为状态行常驻轮询、逐帧发布状态、改设置就重启进程或重新安装所有 Hook。只缓存稳定契约，不把旧几何或旧运行结果当成实时状态。进程被系统直接终止时不能保证清理回调执行。

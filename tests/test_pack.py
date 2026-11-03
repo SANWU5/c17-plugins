@@ -20,6 +20,24 @@ SPEC.loader.exec_module(pack)
 
 
 class PackagingTests(unittest.TestCase):
+    def test_edit_activation_targets_are_declared_switches(self):
+        controls = [{"type": "switch", "key": "gate", "title": "Gate"},
+                    {"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "enableOnEdit": ["gate"]}]
+        pack.validate_form(controls)
+        for targets in ([], ["missing"], ["value"], ["gate", "gate"], "gate", [False]):
+            altered = copy.deepcopy(controls); altered[1]["enableOnEdit"] = targets
+            with self.subTest(targets=targets), self.assertRaises(pack.Invalid): pack.validate_form(altered)
+
+    def test_unbounded_input_is_slider_only_and_frees_presets(self):
+        slider = {"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "default": 50, "unboundedInput": True}
+        preset = {"type": "preset", "key": "far", "title": "Far", "values": {"value": 900}}
+        pack.validate_form([slider, preset])
+        for bad in (dict(slider, unboundedInput=1), dict(slider, default=150),
+                    {"type": "input", "key": "value", "title": "Value", "unboundedInput": True}):
+            with self.subTest(control=bad), self.assertRaises(pack.Invalid): pack.validate_form([bad])
+        with self.assertRaises(pack.Invalid): pack.validate_form([dict(slider, unboundedInput=False), preset])
+        with self.assertRaises(pack.Invalid): pack.validate_form([slider, dict(preset, values={"value": "far"})])
+
     def files(self):
         return pack.read_source(ROOT / "templates" / "clock-seconds")[0]
 
@@ -77,7 +95,7 @@ class PackagingTests(unittest.TestCase):
             entries = [pack.build(source, out) for source in sorted((ROOT / "templates").iterdir())]
             pack.write_index(entries, out)
             catalog = pack.decode_json((out / "index.json").read_bytes())
-            self.assertEqual(3, len(catalog["plugins"]))
+            self.assertEqual(len(entries), len(catalog["plugins"]))
             for item in catalog["plugins"]:
                 data = (out / item["file"]).read_bytes()
                 self.assertEqual(item["sha256"], hashlib.sha256(data).hexdigest())
@@ -123,6 +141,27 @@ class PackagingTests(unittest.TestCase):
                 pack.validate_form([dict(controls[0], **{field: value})], 2)
         with self.assertRaises(pack.Invalid):
             pack.validate_form(controls[:1] + [dict(controls[1], value=True)], 2)
+
+    def test_nested_color_and_preset_form_contract(self):
+        color = {"type": "color", "key": "tint", "title": "颜色", "default": "#80112233",
+                 "groupPath": ["效果调节", "部件", "浅色遮罩"]}
+        amount = {"type": "slider", "key": "amount", "title": "强度", "min": 0, "max": 100, "default": 40}
+        preset = {"type": "preset", "key": "clear", "title": "通透", "values": {"tint": "#FFFFFF", "amount": 20}}
+        for api in (1, 2):
+            pack.validate_form([color, amount, preset], api)
+        for path in ([], ["a"] * 4, "a/b", [None], [" "], ["a\0b"], ["x" * 121]):
+            with self.subTest(path=path), self.assertRaises(pack.Invalid):
+                pack.validate_form([dict(color, groupPath=path)], 2)
+        for value in ("red", "#ABC", "#FFFFFF ", "#00112233extra", 1, True, None):
+            with self.subTest(value=value), self.assertRaises(pack.Invalid):
+                pack.validate_form([dict(color, default=value)], 2)
+        for values in ({}, {"missing": 1}, {"clear": True}, {"amount": 101}, {"tint": "red"}, {str(i): i for i in range(65)}):
+            with self.subTest(values=values), self.assertRaises(pack.Invalid):
+                pack.validate_form([color, amount, dict(preset, values=values)], 2)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form([color, dict(preset, default=True)], 2)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_form([dict(color, values={"tint": "#FFFFFF"})], 2)
 
     def test_native_settings_requires_api2_valid_resource_and_complete_abi_metadata(self):
         files, original = self.api2_files()
@@ -489,7 +528,7 @@ class PackagingTests(unittest.TestCase):
             out = Path(temporary) / "dist"
             before = (ROOT / "index.json").read_bytes()
             self.assertEqual(0, pack.main(["build-all", "--out", str(out)]))
-            self.assertEqual(3, len(list(out.glob("*.zip"))))
+            self.assertEqual(len(list((ROOT / "templates").iterdir())), len(list(out.glob("*.zip"))))
             self.assertFalse((out / "index.json").exists())
             self.assertEqual(before, (ROOT / "index.json").read_bytes())
 

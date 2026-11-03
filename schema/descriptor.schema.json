@@ -98,6 +98,15 @@
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "preferences": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{2,119}$"
+          }
         }
       },
       "oneOf": [
@@ -283,8 +292,35 @@
                     "switch",
                     "slider",
                     "input",
-                    "select"
+                    "select",
+                    "color",
+                    "app",
+                    "sort"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ui": {
+            "items": {
+              "properties": {
+                "type": {
+                  "not": {
+                    "const": "sort"
+                  }
                 }
               }
             }
@@ -319,7 +355,11 @@
             "select",
             "button",
             "action",
-            "status"
+            "status",
+            "color",
+            "preset",
+            "app",
+            "sort"
           ]
         },
         "title": {
@@ -342,7 +382,12 @@
           }
         },
         "default": {
-          "$ref": "#/$defs/state"
+          "type": [
+            "boolean",
+            "number",
+            "string"
+          ],
+          "maxLength": 65536
         },
         "value": {
           "$ref": "#/$defs/state"
@@ -364,6 +409,9 @@
         "unit": {
           "type": "string",
           "maxLength": 16
+        },
+        "unboundedInput": {
+          "type": "boolean"
         },
         "options": {
           "type": "array",
@@ -400,6 +448,61 @@
         "group": {
           "type": "string",
           "maxLength": 120
+        },
+        "groupPath": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?!.*\\u0000).*\\S.*$"
+          }
+        },
+        "values": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 512,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$",
+            "not": {
+              "enum": [
+                "constructor",
+                "prototype"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/state"
+          }
+        },
+        "enableOnEdit": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$"
+          }
+        },
+        "optionsAction": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$",
+          "not": {
+            "enum": [
+              "constructor",
+              "prototype"
+            ]
+          }
+        },
+        "confirmation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "\\S"
         }
       },
       "allOf": [
@@ -456,8 +559,17 @@
           },
           "else": {
             "not": {
-              "required": [
-                "unit"
+              "anyOf": [
+                {
+                  "required": [
+                    "unit"
+                  ]
+                },
+                {
+                  "required": [
+                    "unboundedInput"
+                  ]
+                }
               ]
             }
           }
@@ -544,10 +656,234 @@
                 },
                 {
                   "required": [
+                    "unboundedInput"
+                  ]
+                },
+                {
+                  "required": [
                     "options"
                   ]
                 }
               ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "color"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "string",
+                "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "preset"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "values"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "default"
+                  ]
+                },
+                {
+                  "required": [
+                    "value"
+                  ]
+                },
+                {
+                  "required": [
+                    "min"
+                  ]
+                },
+                {
+                  "required": [
+                    "max"
+                  ]
+                },
+                {
+                  "required": [
+                    "step"
+                  ]
+                },
+                {
+                  "required": [
+                    "unit"
+                  ]
+                },
+                {
+                  "required": [
+                    "unboundedInput"
+                  ]
+                },
+                {
+                  "required": [
+                    "options"
+                  ]
+                }
+              ]
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "values"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "enableOnEdit"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "switch",
+                  "slider",
+                  "color",
+                  "select"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sort"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "optionsAction"
+            ],
+            "properties": {
+              "default": {
+                "type": "string",
+                "maxLength": 65536
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "min"
+                  ]
+                },
+                {
+                  "required": [
+                    "max"
+                  ]
+                },
+                {
+                  "required": [
+                    "step"
+                  ]
+                },
+                {
+                  "required": [
+                    "unit"
+                  ]
+                },
+                {
+                  "required": [
+                    "options"
+                  ]
+                },
+                {
+                  "required": [
+                    "value"
+                  ]
+                },
+                {
+                  "required": [
+                    "values"
+                  ]
+                },
+                {
+                  "required": [
+                    "enableOnEdit"
+                  ]
+                },
+                {
+                  "required": [
+                    "unboundedInput"
+                  ]
+                },
+                {
+                  "required": [
+                    "confirmation"
+                  ]
+                }
+              ]
+            }
+          },
+          "else": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/state"
+              }
+            },
+            "not": {
+              "required": [
+                "optionsAction"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "confirmation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "const": "action"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "app"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "string",
+                "maxLength": 4096,
+                "pattern": "^(?:|[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)+)$"
+              }
             }
           }
         }
@@ -837,5 +1173,5 @@
       ]
     }
   },
-  "$comment": "minimumHost/features/usage/scopes、控件分组及 nativeSettings 为 code210 起的可选展示与能力契约；目录仍使用原有分发元数据。scopes 不授予权限或创建跨进程运行环境。宿主另查 NUL、路径与 manifest/真实描述一致性。"
+  "$comment": "API 1/2 结构契约；统一详情页以宿主 code261 为基线。跨控件引用、排序 JSON 内容、字段类型关联与运行能力由 pack.py 和真实宿主共同核验。minimumHost 是展示说明，features 是宿主能力准入。"
 }

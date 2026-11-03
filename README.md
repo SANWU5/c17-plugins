@@ -1,5 +1,8 @@
 # C17 扩展插件
 
+**新开发入口：宿主 code261 的统一详情页。** 以“更好的玻璃”的说明、设置、管理为标准，主 App 自动提供一键申请作用域、一键重启作用域及公共管理操作。推荐从 [API 2 模板](templates/standard-runtime/README.md) 开始，再读 [页面规范](docs/DETAIL-UI.zh-CN.md) 和 [验收流程](docs/VALIDATION.zh-CN.md)。旧 API 1 模板继续保留。
+
+
 Status C17 的公开插件规范、SDK 开发模板与分发目录。协议支持 **API 1/2**；API 1 用于 Status C17 2.0 起的隔离式设置和规则，API 2 为完整 Java/Android 运行扩展，需要 API 2 宿主。2.0.1 / code193 使用「扩展插件」名称并增加公开仓库目录接入。主应用源码和 APK 不在本仓库。
 
 **当前公开目录为空，不提供可直接安装的示例插件。** [`index.json`](index.json) 的 `plugins` 为 `[]`。`templates/` 只供开发者阅读、复制和改写，不列入应用中的插件下载列表，也不代表任何 ROM 已通过适配。
@@ -17,9 +20,11 @@ API 2 声明 `runtime` 能力并提供 ZIP 内运行入口或内联 `runtime.sou
 
 **`action/status` 表单及 `C17.onAction/publishStatus` 最低需要 Status C17 2.1.0_beta.008 / code206。** code205 虽支持 API 2，仍不接受这两种新表单控件；`apiVersion:2` 本身不保证全部后续接口可用。发行说明必须写清最低宿主，旧 `button` 仍是持久赋值控件。动作每次点击绑定当前运行实例，不会因重载重放；安全模式仍暂停运行。接口与声明、调用示例见 [SDK](docs/SDK.zh-CN.md#一次性动作与只读状态)。
 
-code210 起的可选契约增加 `minimumHost/features/usage/scopes`、控件 `section/group` 和 API 2 原生设置入口。详情按“使用说明与作用域 → 功能与设置 → 插件管理”展示；真实勾选查不到时明确为未知。API 1/2 旧包继续兼容，普通业务迭代只需更新插件自己的版本；只有依赖新增宿主能力才提高最低宿主。三份旧 API 1 教学模板保留原字段。当前规范不表示 code210 已发布或安装，详见 [SDK](docs/SDK.zh-CN.md#详情与宿主能力声明)。
+code210 起的可选契约增加 `minimumHost/features/usage/scopes`、控件 `section/group` 和 API 2 原生设置入口。详情按“使用说明与作用域 → 功能与设置 → 插件管理”展示；真实勾选查不到时明确为未知。API 1/2 旧包继续兼容，普通业务迭代只需更新插件自己的版本；只有依赖新增宿主能力才提高最低宿主。三份旧 API 1 教学模板保留原字段。使用新管理分类需声明 code261 对应能力，详见 [SDK](docs/SDK.zh-CN.md#详情与宿主能力声明)。
 
-当前 runtime 与系统规则只在 SystemUI 执行，`scopes` 声明或框架已勾选其他应用都不会创建跨应用引擎；不支持的执行作用域应阻止启用。原生设置入口只在 C17 App 显示可信插件界面。
+code246 起，API 2 可通过 `minimumHost:246`、`features:["scope.apps", ...]` 和精确 `scopes` 包名在多个应用运行。框架仍须实际勾选对应应用并重新启动其进程；声明本身不会授予作用域。未声明作用域的旧插件仍只在 SystemUI 运行，API 1 系统规则也保持原语义。跨应用包不能混入宿主 `settings/hooks` 输出，不支持系统服务 `android` 或 C17 App 自身。其他应用只接收其作用域内的插件配置与资源，不会取得宿主主设置、其他插件或管理命令；配置变动以事件同步，停用和安全模式执行各进程的清理。原生设置页仍显示在 C17 App 中，详见 [多应用运行](docs/SDK.zh-CN.md#多应用运行code246)。
+
+多应用 `status` 在插件详情中按包名与进程分别显示最近报告及时间，不能把历史报告当作当前在线证明；`action` 仍发送至 SystemUI 实例，不广播给其他应用。仅含外部作用域的插件不能启用依赖该通道的动作或动态排序控件。外部运行的素材、独立数据和清理记录按稳定进程名隔离，子进程仍可运行；不允许声明应用共享偏好文件归属，持久状态请使用 `C17.save/load/dataDir`。code246 的可选 `ui.collapsible-groups` 让分组可以折叠；未声明时沿用旧表单展示。
 
 导入须先查看能力并确认安装，安装和升级都默认停用。启用后的设置或规则冲突会被拒绝；停用、移除及安全模式可撤销插件覆盖。实际效果依赖宿主版本、模块激活和目标 ROM；导入成功不等于适配成功。
 
@@ -46,7 +51,7 @@ code202 起，控制中心自由编辑业务由独立 API 2 插件实现，宿�
 构建器使用 Python 3.10+ 标准库；完整的 JSON Schema 测试还需要安装 `jsonschema`，缺少它时该组测试会标记跳过。先复制 `templates/<模板>/` 到自己的开发目录，修改 ID、名称、作者、许可和行为，核验目标 ROM，再构建并导入本地测试：
 
 ```powershell
-python tools/pack.py lint templates/clock-seconds
+python tools/pack.py standard templates/standard-runtime
 python tools/pack.py build-all --out dist
 python -m unittest discover -s tests -v
 ```

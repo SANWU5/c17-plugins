@@ -1,5 +1,18 @@
 # 更新记录
 
+## 2026-11-03 · code261 统一详情页规范
+
+- 说明、设置、管理统一；明确一键申请/重启作用域及宿主管理操作的职责。
+- 新增 API 2 standard-runtime 模板，提供可运行的配置记录、状态、动作和管理分类示例；旧三份 API 1 模板保留。
+- 新增 standard、descriptor 校验入口；补齐 app、sort、confirmation、runtime.preferences、select 编辑联动和512项预设。
+- Schema、测试与 CI 同步；模板仅供开发，公开下载目录继续为空。
+
+
+## 2026-10-29 · 滑块手动输入不限范围（宿主 code252 起）
+
+- 滑块新增可选 `unboundedInput:true`：拖动仍在 min–max 内，手动输入和预设可填任意有限数值；`default` 仍须在范围内。需声明宿主能力 `ui.unbounded-input` 及 `minimumHost:252`。
+- 同步打包器、descriptor Schema 与正反测试；不改变未声明该字段的滑块行为。
+
 ## 2026-10-21 · 三段详情开发映射与升级验收
 
 - 明确“前置条件—功能与设置—插件管理”的字段来源、作用域真实证据与第三方开发职责，补充管理段持久参数、连续分组及原生复杂设置的使用约定。

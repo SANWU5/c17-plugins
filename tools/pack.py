@@ -101,8 +101,14 @@ def validate_metadata(value, manifest=False, catalog=False):
         raise Invalid("API 2 插件必须声明 runtime 能力")
     if runtime_api and not catalog:
         runtime = value.get("runtime")
-        if not isinstance(runtime, dict) or set(runtime) not in ({"entry"}, {"source"}):
+        if not isinstance(runtime, dict) or set(runtime) - {"entry", "source", "preferences"} or ("entry" in runtime) == ("source" in runtime):
             raise Invalid("API 2 必须声明 runtime.entry 或 runtime.source")
+        if "preferences" in runtime:
+            names = runtime["preferences"]
+            if (not isinstance(names, list) or len(names) > 32
+                    or any(not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{2,119}", name) for name in names)
+                    or len(set(names)) != len(names)):
+                raise Invalid("runtime.preferences 必须为至多 32 个唯一的自有偏好文件名")
         if "entry" in runtime:
             _text(runtime, "entry", 4096)
             validate_path(runtime["entry"], 2)
@@ -117,6 +123,23 @@ def validate_metadata(value, manifest=False, catalog=False):
         validate_path(value["entry"], value["apiVersion"])
         if PurePosixPath(value["entry"]).suffix != ".js":
             raise Invalid("入口必须为 .js")
+
+
+def validate_sort(value):
+    if not isinstance(value, str) or len(value) > 65536:
+        raise Invalid("排序值必须为不超过 65536 字符的 JSON 字符串")
+    data = decode_json(value.encode("utf-8"))
+    lists = [data]
+    if isinstance(data, dict):
+        if set(data) != {"version", "order", "hidden"} or type(data["version"]) is not int or data["version"] != 1:
+            raise Invalid("排序对象需要 version:1、order 和 hidden")
+        lists = [data["order"], data["hidden"]]
+    for items in lists:
+        if (not isinstance(items, list) or any(not isinstance(item, str) or not item.strip() or len(item) > 4096 or "\0" in item for item in items)
+                or len(set(items)) != len(items)):
+            raise Invalid("排序标识必须为唯一的非空字符串")
+    if isinstance(data, dict) and set(data["hidden"]) - set(data["order"]):
+        raise Invalid("隐藏项目必须在排序列表中")
 
 
 def validate_form(controls, api_version=1, native_settings=False):
@@ -134,33 +157,61 @@ def validate_form(controls, api_version=1, native_settings=False):
     def primitive(value):
         return type(value) is bool or isinstance(value, str) and len(value) <= 4096 and "\0" not in value or number(value)
     for control in controls:
-        if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "options", "value", "section", "group"}:
+        if not isinstance(control, dict) or set(control) - {"type", "title", "description", "key", "default", "min", "max", "step", "unit", "unboundedInput", "options", "value", "values", "section", "group", "groupPath", "enableOnEdit", "optionsAction", "confirmation"}:
             raise Invalid("插件控件必须为对象且不能包含未知字段")
         kind = control.get("type")
-        if kind not in ("text", "switch", "slider", "input", "select", "button", "action", "status"):
+        if "enableOnEdit" in control and kind not in ("switch", "slider", "color", "select"):
+            raise Invalid("仅开关、数值、颜色和选择项支持编辑联动")
+        if kind not in ("text", "switch", "slider", "input", "color", "app", "select", "sort", "button", "preset", "action", "status"):
             raise Invalid("不支持的插件控件类型")
-        if kind in ("action", "status") and (api_version != 2 or set(control) - {"type", "title", "description", "key", "section", "group"}):
+        if kind in ("action", "status") and (api_version != 2 or set(control) - {"type", "title", "description", "key", "section", "group", "groupPath", "confirmation"}):
             raise Invalid("一次性操作与只读状态仅用于 API 2，不能包含持久配置字段")
+        if "confirmation" in control:
+            if kind != "action":
+                raise Invalid("只有一次性操作支持确认说明")
+            _text(control, "confirmation", 1024)
+        if "optionsAction" in control and kind != "sort":
+            raise Invalid("只有排序控件支持 optionsAction")
+        if kind == "sort" and (api_version != 2 or set(control) - {"type", "title", "description", "key", "default", "optionsAction", "section", "group", "groupPath"}):
+            raise Invalid("动态排序仅用于 API 2，不能包含其他控件的配置字段")
+        if "values" in control and kind != "preset" or kind == "preset" and set(control) - {"type", "title", "description", "key", "values", "section", "group", "groupPath"}:
+            raise Invalid("预设仅声明组合数值和展示字段，不拥有独立配置值")
         _text(control, "title", 120)
         _text(control, "description", 512, False)
         _text(control, "group", 120, False)
+        if "groupPath" in control:
+            path = control["groupPath"]
+            if not isinstance(path, list) or not 1 <= len(path) <= 3:
+                raise Invalid("插件菜单路径需要 1 到 3 层")
+            for segment in path:
+                _text({"name": segment}, "name", 120)
         if "section" in control and control["section"] not in ("features", "management"):
             raise Invalid("控件 section 只能为 features 或 management")
         if "unit" in control:
             if kind != "slider":
                 raise Invalid("只有滑块可以声明显示单位")
             _text(control, "unit", 16, False)
-        if kind == "text":
+        if "unboundedInput" in control and (kind != "slider" or type(control["unboundedInput"]) is not bool):
+            raise Invalid("只有滑块可以声明不限范围的手动输入，且取值为布尔值")
+        if kind == "text" and "key" not in control:
             continue
         key = control.get("key")
         if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,63}", key) or key in ("constructor", "prototype") or key in keys:
             raise Invalid("插件配置 key 无效或重复")
         keys.add(key)
-        if kind in ("action", "status"):
+        if kind == "sort":
+            action = control.get("optionsAction")
+            if not isinstance(action, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,63}", action) or action in ("constructor", "prototype") or action in keys:
+                raise Invalid("排序 optionsAction 无效或与其他 key 冲突")
+            keys.add(action)
+            validate_sort(control.get("default", "[]"))
+            editable += 1
+            continue
+        if kind in ("text", "action", "status", "preset"):
             continue
         if kind != "button":
             editable += 1
-        default = control.get("default", False if kind == "switch" else control.get("min") if kind == "slider" else control.get("value", True) if kind == "button" else "")
+        default = control.get("default", False if kind == "switch" else control.get("min") if kind == "slider" else control.get("value", True) if kind == "button" else "#FFFFFF" if kind == "color" else "")
         if kind == "select":
             options = control.get("options")
             if not isinstance(options, list) or not 1 <= len(options) <= 64:
@@ -179,6 +230,10 @@ def validate_form(controls, api_version=1, native_settings=False):
                 raise Invalid("默认配置不在选项中")
         if not primitive(default) or kind == "switch" and type(default) is not bool or kind == "input" and not isinstance(default, str):
             raise Invalid("插件配置默认值类型或内容无效")
+        if kind == "color" and (not isinstance(default, str) or not re.fullmatch(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", default)):
+            raise Invalid("颜色应为 #RRGGBB 或 #AARRGGBB")
+        if kind == "app" and (not isinstance(default, str) or default and not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+", default)):
+            raise Invalid("应用默认值必须为空或完整包名")
         if kind == "slider":
             low, high, step = control.get("min"), control.get("max"), control.get("step", 1)
             if not all(number(value) for value in (low, high, step, default)) or not -100000 <= low < high <= 100000 or not 0 < step <= high-low or not low <= default <= high:
@@ -187,6 +242,33 @@ def validate_form(controls, api_version=1, native_settings=False):
             raise Invalid("按钮值必须为文字、有限数字或布尔值")
     if editable == 0 and not native_settings:
         raise Invalid("插件必须提供完整设置，至少声明一个开关、滑块、输入框或选择项；只有说明或按钮不符合规范")
+    persistent = {control["key"]: control for control in controls if control["type"] in ("switch", "slider", "input", "color", "app", "select", "sort", "button")}
+    for control in controls:
+        if "enableOnEdit" not in control:
+            continue
+        gates = control["enableOnEdit"]
+        if (not isinstance(gates, list) or not 1 <= len(gates) <= 4
+                or any(not isinstance(key, str) or key == control.get("key") or persistent.get(key, {}).get("type") != "switch" for key in gates)
+                or len(set(gates)) != len(gates)):
+            raise Invalid("编辑联动只能引用其他已声明的唯一开关")
+    for preset in (control for control in controls if control["type"] == "preset"):
+        values = preset.get("values")
+        if not isinstance(values, dict) or not 1 <= len(values) <= 512 or set(values) - persistent.keys():
+            raise Invalid("预设需要引用 1 到 512 个已声明设置")
+        # Reuse the same value contract, with presets removed so validation cannot recurse.
+        applied = []
+        for control in controls:
+            if control["type"] == "preset":
+                continue
+            if control.get("key") in values:
+                # Like typed values, a preset may leave an unbounded slider's drag range.
+                if control["type"] == "slider" and control.get("unboundedInput") is True:
+                    if not number(values[control["key"]]) or abs(values[control["key"]]) > 3.4028234663852886e38:
+                        raise Invalid("滑块预设值必须为有限数字")
+                else:
+                    control = dict(control, default=values[control["key"]])
+            applied.append(control)
+        validate_form(applied, api_version, native_settings)
 
 
 def validate_source_form(source, api_version=1, native_settings=False):
@@ -200,6 +282,56 @@ def validate_source_form(source, api_version=1, native_settings=False):
     if not source[end:].lstrip().startswith(";"):
         raise Invalid("plugin.ui 严格 JSON 数组后需要分号")
     validate_form(controls, api_version, native_settings)
+    return controls
+
+
+def validate_standard(metadata, controls):
+    """Opt-in authoring convention; legacy packages keep their original admission rules."""
+    validate_metadata(metadata)
+    validate_form(controls, metadata["apiVersion"], "nativeSettings" in metadata)
+    if metadata["apiVersion"] != 2 or metadata.get("minimumHost", 0) < 261:
+        raise Invalid("统一详情页模板需要 API 2，并注明 minimumHost 至少 261")
+    if not metadata.get("usage", "").strip() or not metadata.get("scopes"):
+        raise Invalid("统一详情页需要使用说明和实际应用作用域")
+    features = set(metadata.get("features", []))
+    if not {"ui.group-paths", "ui.management-groups"} <= features:
+        raise Invalid("统一分类需要 ui.group-paths 与 ui.management-groups 能力声明")
+    for control in controls:
+        if control.get("section") not in ("features", "management") or not control.get("groupPath"):
+            raise Invalid("统一详情页控件需明确 section 与 groupPath")
+        needed = {"color": "ui.color", "app": "ui.app", "sort": "ui.sort", "preset": "ui.presets",
+                  "action": "runtime.actions", "status": "runtime.status"}.get(control["type"])
+        dependencies = [needed] if needed else []
+        for field, feature in (("enableOnEdit", "ui.edit-enables"), ("confirmation", "ui.action-confirmation"),
+                               ("unboundedInput", "ui.unbounded-input")):
+            if field in control:
+                dependencies.append(feature)
+        if set(dependencies) - features:
+            raise Invalid("控件缺少能力声明：" + ", ".join(sorted(set(dependencies) - features)))
+    external = set(metadata["scopes"]) - {"com.android.systemui"}
+    if "android" in external or "dev.puitheme.iosstatusbar" in external:
+        raise Invalid("运行作用域不支持系统服务或 C17 自身")
+    if external and ("scope.apps" not in features or metadata["runtime"].get("preferences")):
+        raise Invalid("多应用需要 scope.apps，且不能声明原生偏好文件")
+    if "com.android.systemui" not in metadata["scopes"] and any(c["type"] in ("action", "sort") for c in controls):
+        raise Invalid("表单操作与动态排序需要 SystemUI 作用域")
+
+
+def validate_descriptor(descriptor, manifest=None, standard=False):
+    if not isinstance(descriptor, dict) or set(descriptor) - (PLUGIN_FIELDS | {"ui", "settings", "hooks"}):
+        raise Invalid("描述包含未知字段")
+    metadata = {key: value for key, value in descriptor.items() if key in PLUGIN_FIELDS}
+    validate_metadata(metadata)
+    if manifest is not None:
+        validate_metadata(manifest, True)
+        if metadata != {key: value for key, value in manifest.items() if key != "entry"}:
+            raise Invalid("manifest 与导出描述元数据不一致")
+    validate_form(descriptor.get("ui"), metadata["apiVersion"], "nativeSettings" in metadata)
+    if not isinstance(descriptor.get("settings", {}), dict) or not isinstance(descriptor.get("hooks", []), list):
+        raise Invalid("settings 必须为对象，hooks 必须为数组")
+    if standard:
+        validate_standard(metadata, descriptor["ui"])
+    return metadata
 
 
 def validate_path(name, api_version=1):
@@ -486,7 +618,7 @@ def publish(directory, repository):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("lint", "build", "build-all", "inspect", "catalog", "publish"):
+    for name in ("lint", "standard", "descriptor", "build", "build-all", "inspect", "catalog", "publish"):
         sub = subs.add_parser(name)
         if name == "build-all":
             sub.add_argument("source", type=Path, nargs="?", default=ROOT / "templates")
@@ -496,11 +628,21 @@ def main(argv=None):
             sub.add_argument("--out", type=Path, default=Path("dist"))
         if name == "publish":
             sub.add_argument("--repository", type=Path, default=ROOT)
+        if name == "descriptor":
+            sub.add_argument("--manifest", type=Path)
+            sub.add_argument("--standard", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.command == "lint":
+        if args.command == "descriptor":
+            manifest = decode_json(args.manifest.read_bytes()) if args.manifest else None
+            metadata = validate_descriptor(decode_json(args.source.read_bytes()), manifest, args.standard)
+            print("描述元数据与表单通过：" + metadata["id"] + "；未执行脚本，settings/hooks 语义与运行效果仍由宿主核验")
+        elif args.command in ("lint", "standard"):
             files, manifest = read_source(args.source)
             archive_bytes(files)
+            if args.command == "standard":
+                controls = validate_source_form(files[manifest["entry"]].decode("utf-8-sig"), manifest["apiVersion"], "nativeSettings" in manifest)
+                validate_standard({key: value for key, value in manifest.items() if key != "entry"}, controls)
             print("结构通过：" + manifest["id"] + "；JavaScript 语义仍由 C17 校验")
         elif args.command == "inspect":
             manifest = inspect_archive(args.source.read_bytes())

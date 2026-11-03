@@ -1,5 +1,14 @@
 # 本地构建与正式分发
 
+## code261 标准包发布前检查
+
+1. 新作者先运行 `python tools/pack.py standard <源码目录>`，再 build；旧 API 1 可继续 lint/build。
+2. 动态表单在真实宿主执行后导出 descriptor.json，执行 `python tools/pack.py descriptor descriptor.json --manifest plugin.json --standard`。该命令不执行 JavaScript，不验证完整 settings/hooks 语义，也不代替真实 ZIP 导入。
+3. 安装上一版并保存非默认值，升级新包；核对 ID、配置、排序、独立存储，确认 API 2 升级默认停用的宿主语义，重新启用后继续生效。
+4. 实机核对说明页申请/重启作用域、设置及管理分类、返回路径、运行状态、停用恢复。只发布已明确适配的 ROM 和场景。
+5. 运行全部工具与 Schema 测试；CI 安装 jsonschema，不允许把跳过结构测试当成全通过。生成哈希、审阅差异，再按原分发步骤发布。标准模板不进入下载目录。
+
+
 ## 开发模板
 
 `templates/` 是教学源码，不是公开插件列表。当前 root `index.json` 的 `plugins` 必须保持为空，`packages/` 没有发行包。不要把模板的 ID、作者或 ROM 适配说明直接当成自己的正式插件。

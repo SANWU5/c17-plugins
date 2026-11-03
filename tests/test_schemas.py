@@ -20,6 +20,29 @@ class SchemaParityTests(unittest.TestCase):
                        for name in ("manifest", "descriptor", "catalog")}
         cls.validators = {name: Draft202012Validator(schema) for name, schema in cls.schemas.items()}
 
+    def test_edit_activation_shape(self):
+        descriptor = self.descriptor()
+        descriptor["ui"].append({"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "enableOnEdit": ["option_0"]})
+        self.validators["descriptor"].validate(descriptor)
+        choice = copy.deepcopy(descriptor)
+        choice["ui"][1] = {"type": "select", "key": "value", "title": "Value", "options": [{"value": "a", "label": "A"}], "enableOnEdit": ["option_0"]}
+        self.validators["descriptor"].validate(choice)
+        for targets in ([], ["option_0", "option_0"], "option_0", [False]):
+            bad = copy.deepcopy(descriptor); bad["ui"][1]["enableOnEdit"] = targets
+            self.assertFalse(self.validators["descriptor"].is_valid(bad))
+        bad = copy.deepcopy(descriptor); bad["ui"][1] = {"type": "status", "key": "value", "title": "Status", "enableOnEdit": ["option_0"]}
+        self.assertFalse(self.validators["descriptor"].is_valid(bad))
+
+    def test_unbounded_input_shape(self):
+        descriptor = self.descriptor()
+        descriptor["ui"].append({"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "unboundedInput": True})
+        self.validators["descriptor"].validate(descriptor)
+        for bad in ({"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "unboundedInput": "yes"},
+                    {"type": "input", "key": "value", "title": "Value", "unboundedInput": True},
+                    {"type": "preset", "key": "value", "title": "Value", "values": {"option_0": True}, "unboundedInput": True}):
+            altered = copy.deepcopy(descriptor); altered["ui"][1] = bad
+            self.assertFalse(self.validators["descriptor"].is_valid(altered))
+
     def metadata(self, api_version=2):
         value = {"id": "example.complete.plugin", "name": "Complete plugin", "version": "2.1.0_beta.002",
                  "versionCode": 7, "apiVersion": api_version, "capabilities": ["runtime"] if api_version == 2 else ["settings"]}
@@ -148,6 +171,26 @@ class SchemaParityTests(unittest.TestCase):
                 with self.subTest(kind=kind, field=key):
                     invalid = controls[:1] + [{"type": kind, "title": "Runtime", "key": "runtime", key: value}]
                     self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=invalid)))
+
+
+    def test_nested_color_and_preset_controls(self):
+        color = {"type": "color", "key": "tint", "title": "颜色", "default": "#80112233",
+                 "groupPath": ["效果调节", "部件", "浅色遮罩"]}
+        preset = {"type": "preset", "key": "clear", "title": "通透", "values": {"tint": "#FFFFFF"}}
+        for api in (1, 2):
+            self.validators["descriptor"].validate(dict(self.descriptor(api), ui=[color, preset]))
+        for path in ([], ["a"] * 4, "a/b", [None], [" "], ["a\0b"], ["x" * 121]):
+            with self.subTest(path=path):
+                self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=[dict(color, groupPath=path)])))
+        for value in ("red", "#ABC", "#FFFFFF ", "#00112233extra", 1, True, None):
+            with self.subTest(value=value):
+                self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=[dict(color, default=value)])))
+        for values in ({}, {str(i): i for i in range(65)}, {"tint": []}, None):
+            with self.subTest(values=values):
+                self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=[color, dict(preset, values=values)])))
+        for field, value in (("default", True), ("value", 1), ("options", []), ("min", 0), ("max", 1), ("step", 1)):
+            self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=[color, dict(preset, **{field: value})])))
+        self.assertFalse(self.validators["descriptor"].is_valid(dict(self.descriptor(), ui=[dict(color, values={"tint": "#FFFFFF"})])))
 
 
 if __name__ == "__main__":
