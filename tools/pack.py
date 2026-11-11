@@ -19,14 +19,21 @@ MAX_TOTAL = 1024 * 1024
 MAX_FILES = 32
 ROOT = Path(__file__).resolve().parents[1]
 META_FIELDS = {"id", "name", "version", "versionCode", "apiVersion", "description", "author", "capabilities"}
-PLUGIN_FIELDS = META_FIELDS | {"runtime", "minimumHost", "features", "usage", "scopes", "nativeSettings"}
+PLUGIN_FIELDS = META_FIELDS | {"runtime", "minimumHost", "features", "usage", "scopes", "nativeSettings", "configurationAliases"}
 MANIFEST_FIELDS = PLUGIN_FIELDS | {"entry"}
 ID_RE = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
 SCOPE_RE = re.compile(r"(?:android|[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)\Z")
 CLASS_RE = re.compile(r"[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)+\Z")
+STATE_KEY_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_.-]{0,63}\Z")
 HEADER_RE = re.compile(r"^\s*var\s+plugin\s*=\s*", re.MULTILINE)
 UI_RE = re.compile(r"^\s*plugin\s*\.\s*ui\s*=\s*", re.MULTILINE)
 ALLOWED_EXT = {".js", ".md", ".txt"}
+# Interface translation tables (host code291, ui.i18n): i18n/<language>.json, display text only.
+I18N_RE = re.compile(r"i18n/[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?\.json\Z")
+MAX_I18N_FILES = 64
+MAX_I18N_BYTES = 2 * 1024 * 1024
+MAX_I18N_ENTRIES = 20000
+MAX_I18N_TEXT = 8192
 
 
 class Invalid(ValueError):
@@ -84,6 +91,7 @@ def validate_metadata(value, manifest=False, catalog=False):
         if type(value.get(key)) is not int or not low <= value[key] <= high:
             raise Invalid("元数据整数字段无效：" + key)
     runtime_api = value["apiVersion"] == 2
+    validate_configuration_aliases(value)
     if "nativeSettings" in value:
         native = value["nativeSettings"]
         if not runtime_api or not isinstance(native, dict) or set(native) != {"dex", "className"}:
@@ -123,6 +131,36 @@ def validate_metadata(value, manifest=False, catalog=False):
         validate_path(value["entry"], value["apiVersion"])
         if PurePosixPath(value["entry"]).suffix != ".js":
             raise Invalid("入口必须为 .js")
+
+
+def validate_configuration_aliases(metadata, controls=None):
+    """Retired import keys are explicit, one-step mappings; live state has only current keys."""
+    if "configurationAliases" not in metadata:
+        return
+    aliases = metadata["configurationAliases"]
+    if metadata.get("apiVersion") != 2 or "config.aliases" not in metadata.get("features", []):
+        raise Invalid("配置别名需要 API 2 和 config.aliases 能力声明")
+    if type(metadata.get("minimumHost")) is not int or metadata["minimumHost"] < 265:
+        raise Invalid("配置别名需要 minimumHost 至少 265")
+    if not isinstance(aliases, dict) or len(aliases) > 512:
+        raise Invalid("配置别名必须为最多 512 项的对象")
+    for old, current in aliases.items():
+        if any(not isinstance(key, str) or not STATE_KEY_RE.fullmatch(key)
+               or key in ("constructor", "prototype") for key in (old, current)):
+            raise Invalid("配置别名必须使用合法的状态键")
+        if current in aliases:
+            raise Invalid("配置别名不能形成链或循环")
+    if len(set(aliases.values())) != len(aliases):
+        raise Invalid("配置别名不能重复引用同一目标")
+    if controls is None:
+        return
+    current_keys = {control["key"] for control in controls if "key" in control}
+    persistent = {control["key"] for control in controls
+                  if control["type"] in ("switch", "slider", "input", "color", "app", "select", "sort", "button")}
+    if aliases.keys() & current_keys:
+        raise Invalid("配置别名不能覆盖当前控件键")
+    if set(aliases.values()) - persistent:
+        raise Invalid("配置别名目标必须是当前持久控件")
 
 
 def validate_sort(value):
@@ -289,6 +327,7 @@ def validate_standard(metadata, controls):
     """Opt-in authoring convention; legacy packages keep their original admission rules."""
     validate_metadata(metadata)
     validate_form(controls, metadata["apiVersion"], "nativeSettings" in metadata)
+    validate_configuration_aliases(metadata, controls)
     if metadata["apiVersion"] != 2 or metadata.get("minimumHost", 0) < 261:
         raise Invalid("统一详情页模板需要 API 2，并注明 minimumHost 至少 261")
     if not metadata.get("usage", "").strip() or not metadata.get("scopes"):
@@ -327,6 +366,7 @@ def validate_descriptor(descriptor, manifest=None, standard=False):
         if metadata != {key: value for key, value in manifest.items() if key != "entry"}:
             raise Invalid("manifest 与导出描述元数据不一致")
     validate_form(descriptor.get("ui"), metadata["apiVersion"], "nativeSettings" in metadata)
+    validate_configuration_aliases(metadata, descriptor["ui"])
     if not isinstance(descriptor.get("settings", {}), dict) or not isinstance(descriptor.get("hooks", []), list):
         raise Invalid("settings 必须为对象，hooks 必须为数组")
     if standard:
@@ -343,6 +383,34 @@ def validate_path(name, api_version=1):
         raise Invalid("文件路径必须是无穿越的相对路径：" + name)
     if api_version == 1 and name not in ("LICENSE", "plugin.json") and path.suffix not in ALLOWED_EXT:
         raise Invalid("不支持的包内文件类型：" + name)
+
+
+def validate_i18n(files, api_version):
+    """Every file under i18n/ is a translation table the host can read; anything else there is refused."""
+    tables = {name: data for name, data in files.items() if name.startswith("i18n/")}
+    if not tables:
+        return
+    if api_version != 2:
+        raise Invalid("界面翻译表需要 API 2")
+    if len(tables) > MAX_I18N_FILES:
+        raise Invalid("翻译文件超过 64 个")
+    for name, data in tables.items():
+        if not I18N_RE.match(name):
+            raise Invalid("翻译文件应为 i18n/<语言>.json，例如 i18n/en.json、i18n/zh-Hant.json：" + name)
+        if len(data) > MAX_I18N_BYTES:
+            raise Invalid("翻译文件超过 2MiB：" + name)
+        try:
+            table = json.loads(data.decode("utf-8-sig"), object_pairs_hook=_pairs)
+        except (UnicodeError, ValueError, Invalid) as error:
+            raise Invalid("翻译文件必须是 UTF-8 JSON 对象且键不重复：" + name) from error
+        if not isinstance(table, dict):
+            raise Invalid("翻译文件必须是 JSON 对象：" + name)
+        if len(table) > MAX_I18N_ENTRIES:
+            raise Invalid("翻译条目超过 20000 条：" + name)
+        for key, value in table.items():
+            if (not isinstance(value, str) or not key or not value.strip() or len(key) > MAX_I18N_TEXT
+                    or len(value) > MAX_I18N_TEXT or "\0" in key or "\0" in value):
+                raise Invalid("翻译条目必须把非空原文映射到非空文字：" + name)
 
 
 def validate_files(files):
@@ -369,6 +437,7 @@ def validate_files(files):
                 raise Invalid("插件脚本或说明必须为 UTF-8：" + name) from error
             if "\0" in text:
                 raise Invalid("插件文本不能包含 NUL：" + name)
+    validate_i18n(files, api_version)
     if manifest["entry"] not in files:
         raise Invalid("入口文件不存在：" + manifest["entry"])
     runtime = manifest.get("runtime", {})
@@ -396,7 +465,8 @@ def validate_files(files):
         raise Invalid("manifest 与 JavaScript 元数据头不一致")
     if not re.search(r"\bC17\s*\.\s*define\s*\(", source):
         raise Invalid("脚本没有 C17.define 声明")
-    validate_source_form(source, api_version, native is not None)
+    controls = validate_source_form(source, api_version, native is not None)
+    validate_configuration_aliases(metadata, controls)
     return manifest
 
 

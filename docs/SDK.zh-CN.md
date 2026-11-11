@@ -53,7 +53,7 @@ API 2 的 `entry` 仍是导入时用于身份、表单和预览的 `main.js`。�
 
 标准构建器采用开发模板的写法：`var plugin = {严格 JSON 元数据};`，之后以 `plugin.ui = [严格 JSON 控件声明];` 声明完整表单，再赋值 `plugin.settings` 与 `plugin.hooks`，最后 `C17.define(plugin)`。构建器读取元数据头与 manifest 比对，并静态检查唯一的表单声明、类型、默认值和至少一个可编辑项；它不执行脚本，因此不能证明后续脚本没有改写表单或每个参数都关联功能，宿主仍会对实际输出强制检查。应用也接受直接 `C17.define({...})` 的独立脚本；一般动态脚本可直接交宿主验证导入，标准构建器不负责解析所有 JavaScript 语法。
 
-manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致；新 `minimumHost/features/usage/scopes/nativeSettings` 也必须在 manifest 与实际描述之间一致。宿主允许旧可选字段按既有规则省略；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
+manifest 中声明的 `id/name/version/versionCode/apiVersion/description/author/capabilities` 必须与脚本一致，capabilities 的顺序也必须一致；新 `minimumHost/features/usage/scopes/nativeSettings/configurationAliases` 也必须在 manifest 与实际描述之间一致。宿主允许旧可选字段按既有规则省略；标准构建器要求 manifest 与源码元数据头完全一致，包括可选字段是否出现。元数据不能随表单状态变化。
 
 从在线仓库下载还有独立的目录一致性检查：目录与脚本的 `id/name/version/versionCode/apiVersion` 逐项相同，目录非空白作者与脚本作者相同，能力按集合完全相同；`description` 仅用于展示，不参与这一层的包一致性比较。**目录缺少 capabilities 按空数组处理**；若脚本声明 settings 或 systemui，就必须在目录如实列出，否则下载内容即使通过 size/SHA-256 也会取消导入。这与 ZIP manifest 的可选字段省略规则是不同层次的检查。
 
@@ -70,8 +70,9 @@ descriptor 与 ZIP manifest 可同时声明以下字段，旧插件无需补填�
 | `usage` | 最多 4096 字符，说明使用步骤、影响区域、适配条件及恢复方式 |
 | `scopes` | 至多 64 个唯一 Android 包名，每项最多 240 字符，或 `android`；只声明应用作用域，不授权、自动勾选或创建进程 |
 | `nativeSettings` | API 2 的原生设置入口对象，见下节 |
+| `configurationAliases` | code265 起，API 2 的旧配置键到当前持久控件键的对象，最多 512 项；需 `minimumHost:265` 或更新版本与 `config.aliases` |
 
-运行入口可读取对象属性 `C17.host`，包含 `apiVersion/versionCode/features/runtimePackage`；`features` 是当前宿主实际支持的标识数组，`runtimePackage` 是实际运行所在进程的包名。`C17.hasFeature(name)` 查询某项能力是否存在。code210 声明的能力为 `runtime.java`、`runtime.dex`、`runtime.hooks`、`runtime.main`、`runtime.actions`、`runtime.status`、`ui.groups`、`ui.native-settings`、`scope.systemui`；code246 增加 `scope.apps` 和 `ui.collapsible-groups`；code249 增加 `ui.group-paths`、`ui.color`、`ui.numeric-input` 与 `ui.presets`；code252 增加 `ui.unbounded-input`。能力名不能替代目标 ROM 方法核验，也不会授予额外权限。
+运行入口可读取对象属性 `C17.host`，包含 `apiVersion/versionCode/features/runtimePackage`；`features` 是当前宿主实际支持的标识数组，`runtimePackage` 是实际运行所在进程的包名。`C17.hasFeature(name)` 查询某项能力是否存在。code210 声明的能力为 `runtime.java`、`runtime.dex`、`runtime.hooks`、`runtime.main`、`runtime.actions`、`runtime.status`、`ui.groups`、`ui.native-settings`、`scope.systemui`；code246 增加 `scope.apps` 和 `ui.collapsible-groups`；code249 增加 `ui.group-paths`、`ui.color`、`ui.numeric-input` 与 `ui.presets`；code252 增加 `ui.unbounded-input`；code254 增加 `ui.action-state`；code265 增加 `config.aliases`；code290 增加 `runtime.values`；code291 增加 `ui.i18n`。`ui.edit-enables`、`ui.sort`、`ui.sort-removal`、`ui.app`、`ui.action-confirmation` 与 `ui.management-groups` 的用法见“表单与状态”及下文各节。能力名不能替代目标 ROM 方法核验，也不会授予额外权限。
 
 ```javascript
 // 新字段和探测接口需要 code210；兼容旧宿主的源码应先检查接口是否存在。
@@ -83,6 +84,24 @@ if (typeof C17.hasFeature === "function" && C17.hasFeature("runtime.main")) {
 只有依赖新增宿主能力时才提高 `minimumHost`；普通功能调整在现有 Java/DEX/Hook 接口内完成，递增插件自身 `versionCode` 即可。新字段不被旧宿主识别；需要继续支持旧宿主时，应保留不使用新字段的兼容包，不能仅删除 `minimumHost` 却保留未知字段。三份现有 API 1 模板因此保持旧源码字段和原最低宿主。
 
 code246 起可按下节声明 API 2 多应用作用域；更早的宿主仍只执行 SystemUI。旧包没有 `scopes` 时继续沿用原有 SystemUI 环境。状态栏、控制中心、锁屏等 ROM 组件区域写在 `usage`，不写成应用包名。
+
+### 旧配置键迁移（code265）
+
+插件合并或更名设置后，可在元数据头与 `plugin.json` 同时声明别名：
+
+```json
+{
+  "minimumHost": 265,
+  "features": ["runtime.java", "config.aliases"],
+  "configurationAliases": {"old_strength": "strength"}
+}
+```
+
+这只是元数据片段；完整包仍须提供 API 2、运行入口和当前 `strength` 持久控件。别名对象可为空，最多 512 项。源键和目标键均遵循表单 `key` 的 1–64 字符语法，禁止 `constructor`、`prototype`。源键不得与当前任何控件键重叠，目标必须是 `switch/slider/input/color/app/select/sort/button` 中的一项；禁止同键映射、别名链、循环及重复目标。JSON Schema 校验对象结构、数量与宿主声明；跨控件引用、串联及重复目标由 `pack.py` 和真实宿主继续校验。
+
+只有配置文件的 `pluginVersionCode` 小于当前插件版本时才采用别名。宿主先验证每个旧值是否符合目标控件的值约定，再生成只含当前键的导入状态；原配置文件不会被改写。同一文件同时含 `old_strength` 和 `strength` 时，`strength` 优先，与字段顺序无关，旧值仍须通过验证。只含旧键时迁移到目标，再与当前设置合并；未导入的其他设置与插件启用状态保持。当前版本配置中的旧键、未声明的未知键及来自更新插件版本的配置均拒绝导入。
+
+别名不会创建隐藏控件，不计入持久设置数量，不在当前导出配置中保留旧键，也不会改变普通编辑、预设或运行状态的键。新增该声明后，须验证旧 JSON 导入、目标冲突优先级、错误类型拒绝和未知键拒绝；仅验证插件 ZIP 升级不等于完成旧配置兼容。元数据不随表单状态改变，目录条目不携带该字段。
 
 ### 多应用运行（code246）
 
@@ -304,6 +323,10 @@ C17.onAction("capture", function (request) {
 });
 ```
 
+动作可以声明 `confirmation`（能力 `ui.action-confirmation`，1–1024 字符）：用户点击后宿主先显示这段确认文字，确认后才发起请求。只给会清除数据、重置状态等不可撤销的操作使用。
+
+声明 `ui.action-state`（code254 起）后，动作回调还可以返回 `{"message":"…","state":{"key":值,…}}`：宿主把 `state` 中的每一项当作用户编辑写入对应的持久控件，按控件类型、范围和选项逐项校验，写入方式与在设置页修改相同；未声明此能力时 `state` 被忽略。适合把一次测量或校准的结果保存为设置，例如测得的方向角。键必须是表单中已声明的持久控件，不能借此写入未声明的数据；需要大量或私有数据时仍用 `C17.save`。
+
 `action/status` 最低需要 code206，code205 不支持。状态或动作之间及与可编辑设置之间的 key 必须唯一；code206 只允许 `type/key/title/description`，code210 起还可用展示字段 `section/group`，不接受持久值、数值范围或选项字段。它们不能替代真实功能设置入口。操作只在启用、已就绪且非安全模式的当前实例上执行；业务开关关闭是否允许某个操作，由插件校验自己的业务条件。旧 `button` 的持久赋值语义保持不变。
 
 JS Hook 回调接收 Chain：`getExecutable()`、`getThisObject()`、`getArgs()`、`getArg(index)`、`proceed()`、`proceed(Object[])`、`proceedWith(receiver)`、`proceedWith(receiver,Object[])`。回调返回新结果；`proceed` 使用原方法结果并保留原异常，重复调用不会重复执行原方法。要传入 Java 数组，可通过 Java 反射创建匹配参数类型的数组。类暂未出现时，命名 Hook 会在后续 ClassLoader 到达后重试。
@@ -321,6 +344,50 @@ API 2 与 API 1 有意采用不同的信任模型。启用 API 2 等同于允许
 API 1 继续使用单脚本 256KiB、输出 JSON 128KiB/4096 节点/12 层/256 数组项。导入元数据求值对两个 API 都采用隔离 UID、200000 条指令、约 600ms 解释器检查点、64 层解释栈和 1.5 秒独立看门狗；API 2 的独立运行入口不受这些预算约束。API 2 元数据 JSON 不使用 API 1 的字节、节点、数组项数配额，但仍限制 64 层数据嵌套。
 
 API 1 ZIP 最多 32 项、总解压 1MiB、单项 256KiB；大于 64KiB 的条目压缩比不得超过 200。API 1 只接受 `.js/.md/.txt`、根 `plugin.json` 与 `LICENSE` 文本。两个 API 都拒绝 ZIP 路径穿越、重复规范路径、链接、加密或分卷；API 2 资源可为二进制。当前导入器使用经典 ZIP 的 16/32 位字段，不支持 ZIP64；这是档案格式边界。在线下载还受 Java 字节数组可表示的包长度和实际可用内存约束。路径、磁盘和 Android 运行机制同样不能由插件协议解除。
+
+### 插件间共享值（code290）
+
+声明 `runtime.values` 的插件可以在同一进程内发布和读取少量共享值，用于让多个插件协同显示（例如把媒体卡片算出的强调色交给另一个插件）：
+
+```javascript
+C17.publishValue("media_accent", 0xFF336699);          // 发布到自己名下：<插件 id>/media_accent
+var accent = C17.readValue("host/media_accent");       // 读取宿主或其他插件的值；没有时为 null
+var stop = C17.observeValue("dev.example.other/level", function (value) {
+  // 主线程、插件锁内回调；值变化时才通知，所有者停止时收到 null
+});
+// stop(); 可提前取消；插件停止时宿主自动取消
+```
+
+- 键为 `所有者/名称`：所有者是 `host` 或插件 id，插件只能发布到自己名下；名称为 1–40 个小写字母、数字或下划线。
+- 值只能是 null、布尔、有限数字或不超过 256 字符的字符串；发布 null 即清除。值不变时不通知。
+- 值只存在于当前进程内存，不持久化、不跨进程；插件停止时它发布的值全部清除，观察者收到 null。
+- 宿主当前在 SystemUI 发布 `host/media_accent`：原厂按封面计算的媒体主色。
+
+## 界面翻译（code291）
+
+规则与边界见[分发规范](../SPEC.md#界面翻译code291)。插件以自己的原文编写，另在包内附带翻译表：
+
+```text
+my-plugin/
+  plugin.json
+  main.js
+  runtime.js
+  i18n/
+    en.json        {"自动记录配置变化": "Record configuration changes automatically", ...}
+    zh-Hant.json   {"自动记录配置变化": "自動記錄設定變化", ...}
+```
+
+语言标签与 C17 一致：`en`、`ja`、`ko`、`zh-Hans`、`zh-Hant`、`es`、`pt`、`fr`、`de`、`it`、`nl`、`pl`、`ru`、`uk`、`tr`、`el`、`cs`、`ro`、`sv`、`ar`、`fa`、`he`、`ur`、`hi`、`bn`、`th`、`vi`、`id`、`ms`、`sw`。表中只需列出需要翻译的原文；宿主对每条显示文字做整条精确匹配，找不到时回退到不带地区的语言、`en`（`zh-Hant` 回退 `zh-Hans`），最后显示原文。
+
+建议的做法：
+
+1. 列出所有会显示的原文：manifest 的 `name/description/usage`，`plugin.ui` 中每个控件的 `title/description/unit/confirmation/group/groupPath` 和选项 `label`，以及运行脚本里 `publishStatus` 的固定文字和动作返回的 `message`。表单随状态变化时，要覆盖所有可能出现的控件。
+2. 保持原文稳定。原文改动后旧译文不再匹配，会回到原文显示，发布前应同步更新各语言的表。
+3. 拼接文字无法匹配：`"已保存 " + count + " 项"` 这样的状态应改为固定句子加单独的数字状态项，或在运行脚本中按语言生成。
+4. 占位符、`{…}` 记号、版本号、包名等在译文中保持原样。
+5. 用 `python tools/pack.py standard <目录>` 检查；导入 C17 后切换“关于 → 语言”逐页核对。
+
+`templates/standard-runtime/i18n/en.json` 是一个完整的示例。
 
 ## 验收
 

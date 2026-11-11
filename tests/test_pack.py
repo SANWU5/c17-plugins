@@ -20,6 +20,75 @@ SPEC.loader.exec_module(pack)
 
 
 class PackagingTests(unittest.TestCase):
+    def test_configuration_alias_metadata_requires_explicit_supported_contract(self):
+        _, manifest = self.api2_files()
+        metadata = {key: value for key, value in manifest.items() if key != "entry"}
+        metadata.update(minimumHost=265, features=["config.aliases"], configurationAliases={"old_enabled": "enabled"})
+        pack.validate_metadata(metadata)
+        pack.validate_metadata(dict(metadata, configurationAliases={}))
+        pack.validate_metadata(dict(metadata, configurationAliases={f"old_{n}": f"new_{n}" for n in range(512)}))
+        invalid = [dict(metadata, apiVersion=1), dict(metadata, features=[]), dict(metadata, minimumHost=264),
+                   {key: value for key, value in metadata.items() if key != "features"},
+                   {key: value for key, value in metadata.items() if key != "minimumHost"}]
+        for aliases in (None, [], "old_enabled", {"old": False}, {"bad key": "enabled"}, {"old": "bad key"},
+                        {"constructor": "enabled"}, {"old": "prototype"}, {"old\n": "enabled"}, {"old": "enabled\n"}, {"old": "old"},
+                        {"first": "second", "second": "enabled"}, {"first": "enabled", "second": "enabled"},
+                        {f"old_{n}": f"new_{n}" for n in range(513)}):
+            invalid.append(dict(metadata, configurationAliases=aliases))
+        for value in invalid:
+            with self.subTest(metadata=value), self.assertRaises(pack.Invalid):
+                pack.validate_metadata(value)
+        with self.assertRaises(pack.Invalid):
+            pack.validate_metadata(metadata, catalog=True)
+
+    def test_configuration_alias_targets_are_current_persistent_controls(self):
+        _, manifest = self.api2_files()
+        metadata = {key: value for key, value in manifest.items() if key != "entry"}
+        metadata.update(minimumHost=265, features=["config.aliases"], configurationAliases={"old_enabled": "enabled"})
+        controls = [{"type": "switch", "key": "enabled", "title": "Enable"}]
+        descriptor = dict(metadata, ui=controls)
+        pack.validate_descriptor(descriptor)
+        for aliases in ({"enabled": "enabled"}, {"enabled": "missing"}, {"old_enabled": "missing"}):
+            with self.subTest(aliases=aliases), self.assertRaises(pack.Invalid):
+                pack.validate_descriptor(dict(descriptor, configurationAliases=aliases))
+        for extra in ({"type": "text", "key": "old_enabled", "title": "Old text"},
+                      {"type": "action", "key": "old_enabled", "title": "Old action"},
+                      {"type": "status", "key": "old_enabled", "title": "Old status"}):
+            with self.subTest(source=extra), self.assertRaises(pack.Invalid):
+                pack.validate_descriptor(dict(descriptor, ui=controls + [extra]))
+        for extra in ({"type": "text", "key": "target", "title": "Text"},
+                      {"type": "action", "key": "target", "title": "Action"},
+                      {"type": "status", "key": "target", "title": "Status"},
+                      {"type": "preset", "key": "target", "title": "Preset", "values": {"enabled": True}}):
+            with self.subTest(target=extra), self.assertRaises(pack.Invalid):
+                pack.validate_descriptor(dict(descriptor, ui=controls + [extra], configurationAliases={"old": "target"}))
+        many = dict(descriptor, configurationAliases={f"old_{n}": f"new_{n}" for n in range(512)},
+                    ui=[{"type": "switch", "key": f"new_{n}", "title": f"Current {n}"} for n in range(512)])
+        pack.validate_descriptor(many)
+
+    def test_configuration_aliases_match_manifest_and_validate_packaged_form(self):
+        files, original = self.api2_files()
+        manifest = dict(original, minimumHost=265, features=["config.aliases"], configurationAliases={"old_enabled": "enabled"})
+        metadata = {key: value for key, value in manifest.items() if key != "entry"}
+        controls = [{"type": "switch", "key": "enabled", "title": "Enable"}]
+        files["plugin.json"] = pack.json_bytes(manifest)
+        files["main.js"] = ("var plugin = " + json.dumps(metadata) + ";\nplugin.ui = " + json.dumps(controls)
+                            + ";\nC17.define(plugin);").encode()
+        self.assertEqual(manifest, pack.validate_files(files))
+        self.assertEqual(manifest, pack.inspect_archive(pack.archive_bytes(files)))
+        mismatched = dict(files)
+        mismatched["plugin.json"] = pack.json_bytes(dict(manifest, configurationAliases={"another": "enabled"}))
+        with self.assertRaisesRegex(pack.Invalid, "不一致"):
+            pack.validate_files(mismatched)
+        with self.assertRaisesRegex(pack.Invalid, "不一致"):
+            pack.validate_descriptor(dict(metadata, ui=controls), dict(manifest, configurationAliases={"another": "enabled"}))
+        invalid = dict(files)
+        invalid["main.js"] = ("var plugin = " + json.dumps(metadata) + ";\nplugin.ui = "
+                              + json.dumps(controls + [{"type": "status", "key": "old_enabled", "title": "Existing"}])
+                              + ";\nC17.define(plugin);").encode()
+        with self.assertRaises(pack.Invalid):
+            pack.validate_files(invalid)
+
     def test_edit_activation_targets_are_declared_switches(self):
         controls = [{"type": "switch", "key": "gate", "title": "Gate"},
                     {"type": "slider", "key": "value", "title": "Value", "min": 0, "max": 100, "enableOnEdit": ["gate"]}]
@@ -288,6 +357,50 @@ class PackagingTests(unittest.TestCase):
             reread, read_manifest = pack.read_source(source)
             self.assertEqual(manifest, read_manifest)
             self.assertEqual(files["classes.dex"], reread["classes.dex"])
+
+    def test_api2_translation_tables_are_packed_as_display_data(self):
+        files, manifest = self.api2_files()
+        files["i18n/en.json"] = json.dumps({"启用": "Enable", "保存当前记录": "Save the current record"}, ensure_ascii=False).encode("utf-8")
+        files["i18n/zh-Hant.json"] = json.dumps({"启用": "啟用"}, ensure_ascii=False).encode("utf-8")
+        files["i18n/pt-BR.json"] = b"{}"
+        self.assertEqual(manifest, pack.validate_files(files))
+        data = pack.archive_bytes(files)
+        self.assertEqual(manifest, pack.inspect_archive(data))
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(files["i18n/en.json"], archive.read("i18n/en.json"))
+
+    def test_translation_tables_are_strict_language_tables(self):
+        bad = {
+            "i18n/EN.json": b"{}", "i18n/en_US.json": b"{}", "i18n/source.json": b"{}",
+            "i18n/readme.md": b"notes", "i18n/sub/en.json": b"{}", "i18n/english.json": b"{}",
+        }
+        for name, data in bad.items():
+            files, _ = self.api2_files()
+            files[name] = data
+            with self.subTest(name=name), self.assertRaises(pack.Invalid):
+                pack.validate_files(files)
+        contents = {
+            "array": b"[]", "number value": b'{"a": 1}', "blank value": b'{"a": "  "}', "empty key": b'{"": "x"}',
+            "nul": b'{"a": "b\\u0000"}', "duplicate key": b'{"a": "x", "a": "y"}', "not json": b"{",
+            "too many": json.dumps({f"k{i}": "v" for i in range(pack.MAX_I18N_ENTRIES + 1)}).encode("utf-8"),
+            "too large": b'{"k": "' + b"x" * pack.MAX_I18N_BYTES + b'"}',
+        }
+        for label, data in contents.items():
+            files, _ = self.api2_files()
+            files["i18n/en.json"] = data
+            with self.subTest(content=label), self.assertRaises(pack.Invalid):
+                pack.validate_files(files)
+        files, _ = self.api2_files()
+        files.update({f"i18n/l{index:02d}.json" if index < 26 else f"i18n/x{chr(97 + index % 26)}{chr(97 + index // 26)}.json": b"{}"
+                      for index in range(pack.MAX_I18N_FILES + 1)})
+        with self.assertRaises(pack.Invalid):
+            pack.validate_files(files)
+
+    def test_api1_packages_do_not_carry_translation_tables(self):
+        files = self.files()
+        files["i18n/en.json"] = b'{"a": "b"}'
+        with self.assertRaises(pack.Invalid):
+            pack.validate_files(files)
 
     def test_api2_catalog_allows_java_array_sized_packages(self):
         files, manifest = self.api2_files()

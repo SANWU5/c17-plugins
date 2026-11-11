@@ -65,6 +65,26 @@ class SchemaParityTests(unittest.TestCase):
             with self.subTest(schema=name):
                 Draft202012Validator.check_schema(schema)
 
+    def test_configuration_aliases_have_bounded_shape_and_explicit_host_contract(self):
+        for name, value in (("manifest", dict(self.metadata(), entry="main.js")), ("descriptor", self.descriptor())):
+            valid = dict(value, minimumHost=265, features=["config.aliases"], configurationAliases={"old_option": "option_0"})
+            self.validators[name].validate(valid)
+            self.validators[name].validate(dict(valid, configurationAliases={}))
+            self.validators[name].validate(dict(valid, configurationAliases={f"old_{n}": f"new_{n}" for n in range(512)}))
+            invalid = [dict(valid, apiVersion=1), dict(valid, minimumHost=264), dict(valid, features=[]),
+                       {key: item for key, item in valid.items() if key != "minimumHost"},
+                       {key: item for key, item in valid.items() if key != "features"}]
+            for aliases in (None, [], "old_option", {"old": False}, {"bad key": "option_0"}, {"old": "bad key"},
+                            {"constructor": "option_0"}, {"old": "prototype"}, {"old\n": "option_0"}, {"old": "option_0\n"}, {"x" * 65: "option_0"},
+                            {f"old_{n}": f"new_{n}" for n in range(513)}):
+                invalid.append(dict(valid, configurationAliases=aliases))
+            for altered in invalid:
+                with self.subTest(schema=name, value=altered):
+                    self.assertFalse(self.validators[name].is_valid(altered))
+        catalog = {"schemaVersion": 1, "apiVersion": 2,
+                   "plugins": [self.entry(configurationAliases={"old_option": "option_0"})]}
+        self.assertFalse(self.validators["catalog"].is_valid(catalog))
+
     def test_api1_and_api2_are_valid_across_three_schemas(self):
         for api in (1, 2):
             cases = {"manifest": dict(self.metadata(api), entry="main.js"), "descriptor": self.descriptor(api),
